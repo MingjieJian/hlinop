@@ -124,6 +124,8 @@ C  Paul Barklem, Uppsala, August 2003
 C  Dec 2024, error catch for NUP > NLEVELS added
 C  Nov 2026, excluded-volume switch (HBOP_SET_EXCLUDED_VOLUME); the 
 C            populations are recomputed when the setting changes
+C  Nov 2026, line broadening by H with the total H I density NH
+C            (was the ground-state population NP(1))
 C  Nov 2026, line profiles from HLINPROF (Stehle & Hutcheon tables for
 C            Lyman beta and up, Balmer and Paschen to n_up = 30; HLINOP
 C            otherwise) with the HLINOP cutoffs; HBOP_SET_LINE_PROFILE
@@ -225,14 +227,14 @@ C  tabulated profiles (HLINOP, used for the other lines, has them)
         WCUTF = HLCUT(WAVE,NLO(I),NUP(I),WAVEH(I))
         PROF = 0.
         IF (WCUTF.GT.0.) THEN
-          CALL HLINPROF(WAVE,WAVEH(I),T,NE,NLO(I),NUP(I),NP(1),NHE,
+          CALL HLINPROF(WAVE,WAVEH(I),T,NE,NLO(I),NUP(I),NH,NHE,
      *                  DOP,PROF)
           PROF = PROF * WAVE * WAVE / CAA
           IF ((NLO(I).LE.3).AND.(NUP(I).LE.30).AND.
      *        .NOT.((NLO(I).EQ.1).AND.(NUP(I).EQ.2))) PROF = PROF*WCUTF
         ENDIF
       ELSE
-        PROF = HLINOP(WAVE,NLO(I),NUP(I),WAVEH(I),T,NE,NP(1),NHE,DOP)
+        PROF = HLINOP(WAVE,NLO(I),NUP(I),WAVEH(I),T,NE,NH,NHE,DOP)
       ENDIF
       SIGMA = SF * FNM(NLO(I),NUP(I)) * PROF
       CHI = 0.

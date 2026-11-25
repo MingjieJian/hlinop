@@ -51,7 +51,7 @@ def _line_opacity(nlo, nup, waves, profile, cond=HBOP_CONDITIONS[0]):
     return tot - cont
 
 
-@pytest.mark.parametrize("line", [(2, 10), (2, 22), (3, 14), (1, 3)], ids=lambda l: "%d-%d" % l)
+@pytest.mark.parametrize("line", [(2, 4), (2, 10), (2, 22), (3, 14), (1, 3)], ids=lambda l: "%d-%d" % l)
 def test_hbop_uses_the_tabulated_profiles(line):
     """By default the line opacity of a tabulated line follows HLINPROF (per A, converted to per
     Hz); HBOP_SET_LINE_PROFILE(0) follows HLINOP.  Their ratio equals the profile ratio."""
@@ -61,11 +61,11 @@ def test_hbop_uses_the_tabulated_profiles(line):
     w = w0 + np.array([0.0, 0.5, 2.0, -2.0])
     l1 = _line_opacity(nlo, nup, w, None)
     l0 = _line_opacity(nlo, nup, w, 0)
-    # HBOP passes the ground-state population NP(1) as the H I density for the broadening by
-    # hydrogen; at these conditions NP(1) = NH to < 0.1%
+    # HBOP passes the total H I density NH for the broadening by hydrogen (self broadening of
+    # H alpha - H gamma in HLINPROF, resonance broadening in HLINOP)
     prof_tab = H.hlinprof(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0) * w ** 2 / H.C_ANGSTROM
     _, prof_hlinop = H.profile(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0)
-    np.testing.assert_allclose(l1 / l0, prof_tab / prof_hlinop, rtol=2e-3)
+    np.testing.assert_allclose(l1 / l0, prof_tab / prof_hlinop, rtol=1e-4)
 
 
 def test_tabulated_lines_are_cut_at_the_series_limit():

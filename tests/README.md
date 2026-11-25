@@ -34,7 +34,7 @@ GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux fo
 
 2. **Stable snapshots** (`test_regression.py`, kind `stable`): `HBF`, `HLINPROF` for tabulated lines, and `WCALC` by default and with the Hummer & Mihalas excluded volume. These are change detectors for parts that no planned change should alter. They do not certify the numbers.
 
-3. **Legacy snapshots** (marker `legacy`): `HPROFL`/`HLINOP` Stark profiles and the `HBOP` opacities that use them: `hbop` (defaults), `hbop_hlinop_profiles` (`HBOP_SET_LINE_PROFILE(0)`) and `hbop_original` (HLINOP profiles and the Hummer & Mihalas excluded volume, i.e. the code before Nov 2026; equal bit for bit to the snapshots taken before the changes). These are parts that planned changes will alter on purpose. A change that alters them regenerates the snapshot in the same commit and says why:
+3. **Legacy snapshots** (marker `legacy`): `HPROFL`/`HLINOP` Stark profiles and the `HBOP` opacities that use them: `hbop` (defaults), `hbop_hlinop_profiles` (`HBOP_SET_LINE_PROFILE(0)`) and `hbop_legacy_settings` (HLINOP profiles with `HLINOP_SET_CONVOLUTION(0)` and the Hummer & Mihalas excluded volume: the physics settings of the code before Nov 2026, but with the later bug fixes, so no longer equal to it bit for bit). These are parts that planned changes will alter on purpose. A change that alters them regenerates the snapshot in the same commit and says why:
 
    ```
    python tests/snapshots.py
@@ -50,6 +50,7 @@ None at present.
 
 ### Fixed (Nov 2026)
 
+- **Self-broadening density.** `HBOP` passed the ground-state population `NP(1)` as the H I density for broadening by hydrogen; it now passes `NH`.
 - **`HPROFL` added the broadening mechanisms outside the core.** Inside the core it used the dominant mechanism; outside it, it added all of them. Where Doppler broadening dominated, this added 2–39% to the area and left Stark broadening out of the core. The mechanisms are now convolved (`HPCONV`). Areas are 1 to 0.1%. The end-to-end test compares `HPROFL` with the Doppler-convolved Stehlé & Hutcheon profiles (within 10%).
 - **`STARK1` added the ion quasistatic, electron quasistatic and electron impact parts instead of convolving them.** Areas were 1.74–2.14. The parts are now convolved (B: norm(ion) ⊛ norm(impact + electron wing)), with `HLINOP_SET_CONVOLUTION(0)` keeping the old code. The tests compare with Stehlé & Hutcheon (n_up ≥ 8; HWHM and peak within 10%) and with Lemke VCS for Brackett (within 15%).
 
@@ -59,7 +60,6 @@ None at present.
 2. **`NBF` disagrees with the header.** `NBF = 6`, so bound–free absorption from n ≥ 7 is omitted, while the header says the limit is 15.
 3. **`STARK1` cache key.** The old `STARK1` caches `C1CON`/`C2CON`, which depend on `WAVEH`, keyed on (N, M) only, so a call with the same (N, M) and a different line centre reuses stale values. It is still so in `STARK1L`, kept unchanged. `STARK1PARTS`, used by the convolved profile, keys on (N, M, `WAVEH`).
 4. **Undefined variable in `STARK1L`.** The old `STARK1`, now `STARK1L`, computes `T3NHE` from `HE1FRC`, which is not one of its arguments; the value is never used. It is removed in `STARK1PARTS`.
-5. **Self-broadening density.** `HBOP` passes `NP(1)`, the ground-state population, as the H I density used for self-broadening, instead of the total `NH` (equal to < 0.1% in FGK photospheres).
 6. **`HLINPROF` adds area.** The self-broadening Lorentzian is added (not convolved) beyond 0.2 Å from the centre. This adds up to 4% to the area (Hγ, n_HI = 1e17). The test tolerance is 5%.
 7. **The published Stehle tables are not quite normalised.** Integrating the CDS profiles directly over their tabulated range gives 0.97–0.99 (Hβ, H10, Pa14, Lyβ at 1e14 cm⁻³), and HLINPROF reproduces this. The `HLINPROF` area tolerance is 5%.
    - Tabulated profiles contain thermal Doppler broadening only; the Doppler width passed in (with microturbulence) is used only for lines that go to HLINOP.
