@@ -3,6 +3,9 @@ C   Table of contents:
 C
 C     SUBROUTINE HLINPROF(WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,
 C    *                   H1FRC,HE1FRC,DOP,PROF)
+C     SUBROUTINE HLINPROF_SET_FILES(STEFILE,SELFFILE,VCSFILE)
+C     INTEGER FUNCTION HLINPROF_SOURCE()
+C     BLOCK DATA HLPRFD
 C     REAL*8 FUNCTION HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,...)
 C     REAL*8 FUNCTION HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,...)
 C     SUBROUTINE STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
@@ -84,10 +87,17 @@ C
       REAL*8 C,PI
       CHARACTER*256 HFILE,HVCSFILE,HSELFFILE
       LOGICAL FIRST
+C  table files in use: from DATA.FILES, or set with HLINPROF_SET_FILES
+      CHARACTER*592 HF,HSF,HVF
+      CHARACTER*592 FSTE,FSELF,FVCS
+      COMMON /HLFILN/ FSTE,FSELF,FVCS
+      INTEGER NFSET,ISRC,LFSET
+      COMMON /HLFILC/ NFSET,ISRC
+      EXTERNAL HLPRFD
 C
-      SAVE FIRST 
+      SAVE FIRST,HF,HSF,HVF,LFSET
 C
-      DATA FIRST/.TRUE./
+      DATA FIRST/.TRUE./, LFSET/-1/
       PARAMETER (C = 2.997925E+18, PI = 3.14159265)
       INCLUDE 'DATA.FILES'
 C
@@ -98,6 +108,18 @@ C
       ISELF = 2
       ICONV = 1
       IHE = 1
+C
+C Table file names (only when they change)
+C
+      IF (LFSET.NE.NFSET) THEN
+        HF = HFILE
+        HSF = HSELFFILE
+        HVF = HVCSFILE
+        IF (FSTE.NE.' ') HF = FSTE
+        IF (FSELF.NE.' ') HSF = FSELF
+        IF (FVCS.NE.' ') HVF = FVCS
+        LFSET = NFSET
+      ENDIF
 C
 C We check we have a line which we can handle
 C  if not then pass to HLINOP
@@ -116,6 +138,7 @@ C
           FIRST = .FALSE.
           PRINT*,' Using Hlinop code!'
         ENDIF
+        ISRC = 0
         PROF = HLINOP(WAVE,NLOW,NUP,WAVE0,TEMP,XXNE,H1FRC,
      ;                                          HE1FRC,DOP)
         PROF = PROF * C/WAVE/WAVE
@@ -145,13 +168,15 @@ C broadening grid profiles) or ICONV = 2.
 C
       IF ((CONVOLUTION_MODE.EQ.1).AND.(ICONV.EQ.1).AND.(ISTARK.EQ.1)
      ;    .AND.(ISELF.NE.1)) THEN
-        CALL STEHLE(HFILE,WAVE0,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
+        CALL STEHLE(HF,WAVE0,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
         IF (HLIN.LT.0.) THEN
+          ISRC = 0
           PROF = HLINOP(WAVE,NLOW,NUP,WAVE0,TEMP,XXNE,H1FRC,
      ;                                          HE1FRC,DOP)
           PROF = PROF * C/WAVE/WAVE
           RETURN
         ENDIF
+        ISRC = 1
 C  Lorentz half width (A): self + radiative + helium
         HWID = 0.D0
         IF (H1FRC.GT.0.) THEN
@@ -173,11 +198,11 @@ C  Doppler broadening beyond the thermal width of H in the tables
         AEXT = 0.D0
         IF (DOP.GT.DOPTH) AEXT = WAVE0*SQRT(DBLE(DOP)**2-DOPTH**2)
         IF ((NLOW.EQ.1).AND.(NUP.EQ.2)) THEN
-          PROF = HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,AEXT,
+          PROF = HLYAPRF(HF,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,AEXT,
      ;                   DBLE(RAD)*WAVE0*WAVE0/C/2./PI)
           RETURN
         ENDIF
-        PROF = HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,AEXT,GAML)
+        PROF = HLPCONV(HF,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,AEXT,GAML)
         RETURN
       ENDIF
 C
@@ -187,12 +212,14 @@ C
         HLIN = 0. 
         HHLIN = 0.
         IF (ISTARK .EQ. 1) THEN
-          CALL STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
+          CALL STEHLE(HF,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
+          ISRC = 1
 C
 C If outside the table (temperature, or density below the table) use
 C HLINOP, which includes all broadening mechanisms itself
 C
           IF (HLIN.LT.0.) THEN
+            ISRC = 0
             PROF = HLINOP(WAVE,NLOW,NUP,WAVE0,TEMP,XXNE,H1FRC,
      ;                                          HE1FRC,DOP)
             PROF = PROF * C/WAVE/WAVE
@@ -200,8 +227,10 @@ C
           ENDIF
         END IF
         IF (ISTARK .EQ. 2) THEN
-          CALL VCS(HLIND,XNED,TD,DEL,1,NLOW,NUP,HVCSFILE)
+          CALL VCS(HLIND,XNED,TD,DEL,1,NLOW,NUP,HVF)
+          ISRC = 2
           IF (HLIND.LT.0.) THEN
+            ISRC = 0
             PROF = HLINOP(WAVE,NLOW,NUP,WAVE0,TEMP,XXNE,H1FRC,
      ;                                          HE1FRC,DOP)
             PROF = PROF * C/WAVE/WAVE
@@ -211,7 +240,7 @@ C
         END IF
         IF ((DEL .GT. .2d0) .AND. (H1FRC .GT. 0.)) THEN
           IF (ISELF .EQ. 1) THEN
-             CALL HGRID(HSELFFILE,
+             CALL HGRID(HSF,
      ;            WAVE,WAVE0,TD,H1FRCD,NLOW,NUP,HHLIN)
 C
 C If outside table range use p-d approx
@@ -272,7 +301,7 @@ C
         DO IKRN = 1, NKRN
           WV2 = WAVE0 + WLKRN(IKRN)
             HHLIN = 0.
-            IF (ISELF .EQ. 1) CALL HGRID(HSELFFILE,
+            IF (ISELF .EQ. 1) CALL HGRID(HSF,
      ;              WV2,WAVE0,TD,H1FRCD,NLOW,NUP,HHLIN)
             IF (ISELF .EQ. 2) THEN
               CALL HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,HWID)
@@ -296,10 +325,10 @@ C
           I2 = MIN0(NKRN, IKRN + 1)
 		  DDEL = WLKRN(I2) - WLKRN(I1)
           IF (ISTARK .EQ. 1) THEN
-            CALL STEHLE(HFILE,WAVE0+DEL1,WAVE0,TEMP,XXNE,NLOW,NUP,STARK)
+            CALL STEHLE(HF,WAVE0+DEL1,WAVE0,TEMP,XXNE,NLOW,NUP,STARK)
           END IF
           IF (ISTARK .EQ. 2) THEN
-            CALL VCS(STARKD,XNED,TD,DEL1,1,NLOW,NUP,HVCSFILE)
+            CALL VCS(STARKD,XNED,TD,DEL1,1,NLOW,NUP,HVF)
             STARK = STARKD
           END IF
           F1 = KERN(IKRN) * STARK
@@ -307,6 +336,7 @@ C
         END DO
         HLIND= HLIND * .5d0
         HLIN = HLIND
+        ISRC = ISTARK
       END IF
 C
 C The He and radiative broadening are always assumed small enough to 
@@ -327,6 +357,58 @@ C
       PROF = HLIN
       RETURN
 C
+      END
+
+C***********************************************************************
+      SUBROUTINE HLINPROF_SET_FILES(STEFILE,SELFFILE,VCSFILE)
+C
+C  Table files for HLINPROF at run time (full paths, at most 592 
+C  characters): the Stehle & Hutcheon table (stehle_long.dat), the 
+C  self-broadening grid (ISELF = 1) and the VCS table (ISTARK = 2).  A
+C  blank name keeps the file compiled in from DATA.FILES.  Call before 
+C  the first profile: each table is read once.
+C
+      CHARACTER*(*) STEFILE,SELFFILE,VCSFILE
+      CHARACTER*592 FSTE,FSELF,FVCS
+      COMMON /HLFILN/ FSTE,FSELF,FVCS
+      INTEGER NFSET,ISRC
+      COMMON /HLFILC/ NFSET,ISRC
+      EXTERNAL HLPRFD
+      IF (LEN(STEFILE).GT.592 .OR. LEN(SELFFILE).GT.592 .OR.
+     *    LEN(VCSFILE).GT.592)
+     *  STOP 'HLINPROF_SET_FILES: file name longer than 592 characters'
+      FSTE = STEFILE
+      FSELF = SELFFILE
+      FVCS = VCSFILE
+      NFSET = NFSET + 1
+      RETURN
+      END
+
+C***********************************************************************
+      INTEGER FUNCTION HLINPROF_SOURCE()
+C
+C  Which profile the last call of HLINPROF returned: 1 = Stehle & 
+C  Hutcheon table (convolved as described in HLINPROF), 2 = VCS table
+C  (ISTARK = 2), 0 = HLINOP (no table for the line, or temperature or 
+C  density outside it), -1 = no call yet.  For codes that report the 
+C  lines that fall back to HLINOP.
+C
+      INTEGER NFSET,ISRC
+      COMMON /HLFILC/ NFSET,ISRC
+      EXTERNAL HLPRFD
+      HLINPROF_SOURCE = ISRC
+      RETURN
+      END
+
+C***********************************************************************
+      BLOCK DATA HLPRFD
+C  No table files set at run time; no HLINPROF call yet.
+      CHARACTER*592 FSTE,FSELF,FVCS
+      COMMON /HLFILN/ FSTE,FSELF,FVCS
+      INTEGER NFSET,ISRC
+      COMMON /HLFILC/ NFSET,ISRC
+      DATA FSTE,FSELF,FVCS /3*' '/
+      DATA NFSET,ISRC /0,-1/
       END
 
       REAL*8 FUNCTION HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,

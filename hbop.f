@@ -23,6 +23,9 @@ C  Table of Contents:
 C  ------------------
 C 
 C  REAL HBOP(WAVE,N,NLO,NUP,WAVEH,NH,NHE,NE,T,DOP,NPOP,NL,TOTAL,CONTIN)   
+C  SUBROUTINE HBOP_LEVELS(NH,NHE,NE,T,NLEV,W,NLTE)
+C  SUBROUTINE HBOP_BF(WAVE,NH,NHE,NE,T,W,NP,NLTE,CONTIN)
+C  SUBROUTINE HBOPLV, HBOPBF, HBOPEN (internal)
 C  REAL FUNCTION WCALC(NH, NE, NHW, NS, TEMP)	
 C  SUBROUTINE HBOP_SET_EXCLUDED_VOLUME(SCALE)
 C  SUBROUTINE HBOP_SET_LINE_PROFILE(MODE)
@@ -143,13 +146,12 @@ C
       PARAMETER (NBF = 15)
       REAL NH, NHE, NE, T, CONTIN, DOP, TOTAL
       REAL NHL, NHEL, NEL, TL
-      REAL*8 W(NLEVELS), G(NLEVELS), WGE(NLEVELS)
+      REAL*8 W(NLEVELS), G(NLEVELS)
       REAL NLTE(NLEVELS), NPOP(*), NP(NLEVELS)
-      REAL Z, H, C, HC, K, KT, LINE, SIGMA, CHI, SF
-      REAL IONH, X, HFNM, FNM(NLEVELS,NLEVELS), HLINOP, HBF
+      REAL H, C, HC, K, KT, LINE, SIGMA, CHI, SF
+      REAL IONH, HFNM, FNM(NLEVELS,NLEVELS), HLINOP
       REAL TS, TF
-      REAL*8 WAVE, WAVEH(*), REDCUT, WAVEV, HBNSTAR, AIRVAC
-      REAL*8 EHYD(NLEVELS), CONTH(NLEVELS), WCALC, D, WSTAR, TAPER
+      REAL*8 WAVE, WAVEH(*)
       LOGICAL FIRST
       REAL EXCLUDED_VOLUME_SCALE, EVSL
       COMMON /HBOPEV/ EXCLUDED_VOLUME_SCALE
@@ -170,20 +172,8 @@ C
 C
       IF (FIRST) THEN
 C
-C  Compute energy levels in the H atom, and store f-values
+C  Store f-values (level energies: HBOPEN)
 C
-        EHYD(1) =      0.000D0
-        EHYD(2) =  82259.105D0
-        EHYD(3) =  97492.302D0
-        EHYD(4) = 102823.893D0
-        EHYD(5) = 105291.651D0
-        EHYD(6) = 106632.160D0
-        EHYD(7) = 107440.444D0
-        EHYD(8) = 107965.051D0
-        DO 1 I = 9, NLEVELS
- 1      EHYD(I) = 109678.764D0 - 109677.576D0/(I*I)
-        DO 2 I = 1, NLEVELS
- 2      CONTH(I) = 109678.764D0 - EHYD(I)
         FIRST = .FALSE.
         DO 4 I = 1, NLEVELS-1
         DO 3 J = I+1, NLEVELS
@@ -201,15 +191,8 @@ C
      +   (ABS(NE-NEL).LT.1E-3*NE).AND.(ABS(T-TL).LT.1E-3*T).AND.
      +   (EXCLUDED_VOLUME_SCALE.EQ.EVSL))
      *   GOTO 16
-      Z = 0.
       KT = K*T
-      DO 10 I = 1, NLEVELS
-      W(I) = WCALC(NH, NE, NHE, FLOAT(I), T)
-      G(I) = 2.*I*I
-      WGE(I) = W(I)*G(I)*DEXP(-HC*EHYD(I)/KT)
- 10   Z = Z + WGE(I)
-      DO 15 I = 1, NLEVELS
- 15   NLTE(I) = NH*WGE(I)/Z  ! LTE populations
+      CALL HBOPLV(NH, NHE, NE, T, W, G, NLTE)
       NHL = NH
       NHEL = NHE
       NEL = NE
@@ -254,7 +237,110 @@ C  tabulated profiles (HLINOP, used for the other lines, has them)
  30   LINE = LINE + CHI
 C
 C  Compute the continuous components - sum over NBF lowest states
+C  (HBOPBF, with the temperature of the cached populations)
 C     
+      CALL HBOPBF(WAVE, NH, NHE, NE, T, KT, W, NP, NLTE, CONTIN)
+C
+C  Sum up and we're done
+C
+      TOTAL = CONTIN + LINE
+C
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HBOP_LEVELS(NH, NHE, NE, T, NLEV, W, NLTE)
+C
+C  Occupation probabilities W (WCALC) and LTE populations NLTE (cm-3)
+C  of the levels n = 1..NLEV (NLEV <= 100) of H I, as used by HBOP: 
+C  NLTE(n) = NH w(n) g(n) exp(-E(n)/kT) / Z, with Z summed over 
+C  n = 1..100 with the occupation probabilities.  NH = total number 
+C  density of H I, NHE of He I, NE of electrons (cm-3), T in K.
+C  For codes that compute the line opacities themselves: in LTE HBOP's
+C  line opacity is the usual one with the lower-level population 
+C  NLTE(lo) times W(up)/W(lo) (W(lo) is in NLTE(lo)); the bound-free 
+C  opacity with the dissolved levels is HBOP_BF.
+C
+      IMPLICIT NONE
+      INTEGER NLEV, NLEVELS, I
+      PARAMETER (NLEVELS = 100)
+      REAL NH, NHE, NE, T, NLTE(*)
+      REAL*8 W(*), WA(NLEVELS), GA(NLEVELS)
+      REAL NLTEA(NLEVELS)
+      IF ((NLEV.LT.1).OR.(NLEV.GT.NLEVELS)) 
+     *  STOP 'HBOP_LEVELS: NLEV must be 1-100'
+      CALL HBOPLV(NH, NHE, NE, T, WA, GA, NLTEA)
+      DO 10 I = 1, NLEV
+        W(I) = WA(I)
+        NLTE(I) = NLTEA(I)
+   10 CONTINUE
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HBOP_BF(WAVE, NH, NHE, NE, T, W, NP, NLTE, CONTIN)
+C
+C  Bound-free absorption coefficient (cm-1) of H I from the levels 
+C  n = 1..NBF (15) at WAVE (A; in air above 2000 A), including the 
+C  dissolved-level (pseudo-continuum) absorption below each edge in 
+C  the occupation probability formalism, as in HBOP.  W, NLTE: from 
+C  HBOP_LEVELS for this NH, NHE, NE, T (at least 15 levels); NP: the 
+C  populations to use for absorption (NLTE in LTE, or non-LTE ones);
+C  stimulated emission from NLTE.  A code can call HBOP_LEVELS once per
+C  depth and HBOP_BF for every wavelength.
+C
+      IMPLICIT NONE
+      REAL NH, NHE, NE, T, NP(*), NLTE(*), CONTIN, K, KT
+      REAL*8 WAVE, W(*)
+      PARAMETER (K=1.38065E-16)
+      KT = K*T
+      CALL HBOPBF(WAVE, NH, NHE, NE, T, KT, W, NP, NLTE, CONTIN)
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HBOPLV(NH, NHE, NE, T, W, G, NLTE)
+C
+C  Occupation probabilities, statistical weights and LTE populations of
+C  the levels n = 1..NLEVELS (internal; HBOP and HBOP_LEVELS).
+C
+      IMPLICIT NONE
+      INTEGER NLEVELS, I
+      PARAMETER (NLEVELS = 100)
+      REAL NH, NHE, NE, T, NLTE(NLEVELS), Z, H, C, HC, K, KT
+      REAL*8 W(NLEVELS), G(NLEVELS), WGE(NLEVELS), EHYD(NLEVELS)
+      REAL*8 WCALC
+      PARAMETER (H=6.62607E-27, C=2.9979E10, K=1.38065E-16)
+      PARAMETER (HC=H*C)
+      CALL HBOPEN(EHYD)
+      Z = 0.
+      KT = K*T
+      DO 10 I = 1, NLEVELS
+      W(I) = WCALC(NH, NE, NHE, FLOAT(I), T)
+      G(I) = 2.*I*I
+      WGE(I) = W(I)*G(I)*DEXP(-HC*EHYD(I)/KT)
+ 10   Z = Z + WGE(I)
+      DO 15 I = 1, NLEVELS
+ 15   NLTE(I) = NH*WGE(I)/Z  ! LTE populations
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HBOPBF(WAVE, NH, NHE, NE, T, KT, W, NP, NLTE, CONTIN)
+C
+C  Bound-free sum over the NBF lowest levels (internal; HBOP, HBOP_BF).
+C  KT: k times the temperature of the populations NLTE.
+C
+      IMPLICIT NONE
+      INTEGER NBF, NLEVELS, I
+      PARAMETER (NBF = 15, NLEVELS = 100)
+      REAL NH, NHE, NE, T, KT, NP(*), NLTE(*), CONTIN, CHI, X
+      REAL H, C, HC, HBF
+      REAL*8 WAVE, W(*), WAVEV, REDCUT, D, WSTAR, TAPER
+      REAL*8 EHYD(NLEVELS), WCALC, HBNSTAR, AIRVAC
+      PARAMETER (H=6.62607E-27, C=2.9979E10)
+      PARAMETER (HC=H*C)
+      CALL HBOPEN(EHYD)
       CONTIN = 0.
 C  The continuum is computed in vacuum wavelengths; WAVE is in air 
 C  above 2000 A (as for the lines, see HLINOP)
@@ -295,11 +381,36 @@ C  about 5 micron before Nov 2026): skip such levels
      *       /KT)) * D * HBF(WAVEV, I) * TAPER
 CC      ENDIF
  40   CONTIN = CONTIN + CHI
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HBOPEN(EHYD)
 C
-C  Sum up and we're done
+C  Level energies (cm-1) of H I as used in HBOP (internal).
 C
-      TOTAL = CONTIN + LINE
-C
+      IMPLICIT NONE
+      INTEGER NLEVELS, I
+      PARAMETER (NLEVELS = 100)
+      REAL*8 EHYD(NLEVELS), E(NLEVELS)
+      LOGICAL FIRST
+      SAVE E, FIRST
+      DATA FIRST/.TRUE./
+      IF (FIRST) THEN
+        E(1) =      0.000D0
+        E(2) =  82259.105D0
+        E(3) =  97492.302D0
+        E(4) = 102823.893D0
+        E(5) = 105291.651D0
+        E(6) = 106632.160D0
+        E(7) = 107440.444D0
+        E(8) = 107965.051D0
+        DO 1 I = 9, NLEVELS
+ 1      E(I) = 109678.764D0 - 109677.576D0/(I*I)
+        FIRST = .FALSE.
+      ENDIF
+      DO 2 I = 1, NLEVELS
+ 2    EHYD(I) = E(I)
       RETURN
       END
 
