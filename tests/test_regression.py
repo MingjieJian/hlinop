@@ -25,12 +25,12 @@ def _check(name):
     np.testing.assert_allclose(a, b, rtol=RTOL, atol=ATOL)
 
 
-@pytest.mark.parametrize("name", ["hbf", "hlinprof"])
+@pytest.mark.parametrize("name", ["hbf", "hlinprof", "wcalc", "wcalc_hm88"])
 def test_stable_snapshot(name):
     _check(name)
 
 
 @pytest.mark.legacy
-@pytest.mark.parametrize("name", ["wcalc", "profile", "hbop"])
+@pytest.mark.parametrize("name", ["profile", "hbop", "hbop_hm88"])
 def test_legacy_snapshot(name):
     _check(name)

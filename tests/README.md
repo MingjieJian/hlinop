@@ -21,16 +21,17 @@ GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux fo
 
 1. **Physics tests**: properties that correct code must have, whatever it returns today.
    - profiles have unit area;
-   - `WCALC` agrees with an independent transcription of the published formulas (Hummer & Mihalas 1988 eq. 4.71; Hubeny, Hummer & Lanz 1994 App. A);
+   - `WCALC` agrees with an independent transcription of the published formulas (Hummer & Mihalas 1988 eq. 4.71; Hubeny, Hummer & Lanz 1994 App. A) for the default (no neutral term) and for excluded-volume scales 1, 0.5 and 0;
+   - `HBOP` recomputes its cached populations when the excluded-volume setting changes;
    - `w` → 1 without perturbers, and `w` falls with n;
    - the continuum is smooth across the Balmer limit;
    - `HLINOP` equals `HPROFL` inside its cut-offs.
 
    A physics test that the current code fails is marked `known_issue` and `xfail` with the reason. `xfail_strict` is on, so once a fix lands the test reports XPASS and fails. The `xfail` mark must then be removed in the same change. The suite therefore records which problems are known and when each one was fixed.
 
-2. **Stable snapshots** (`test_regression.py`, kind `stable`): `HBF`, and `HLINPROF` for Hα–Hγ. These are change detectors for parts that no planned change should alter. They do not certify the numbers.
+2. **Stable snapshots** (`test_regression.py`, kind `stable`): `HBF`, `HLINPROF` for Hα–Hγ, and `WCALC` by default and with the Hummer & Mihalas excluded volume. These are change detectors for parts that no planned change should alter. They do not certify the numbers.
 
-3. **Legacy snapshots** (marker `legacy`): the `WCALC` default with the neutral term, `HPROFL`/`HLINOP` Stark profiles, and `HBOP` opacities. These are parts that planned changes will alter on purpose. A change that alters them regenerates the snapshot in the same commit and says why:
+3. **Legacy snapshots** (marker `legacy`): `HPROFL`/`HLINOP` Stark profiles and the `HBOP` opacities that use them, with the default setting and with `HBOP_SET_EXCLUDED_VOLUME(1.0)`. These are parts that planned changes will alter on purpose. A change that alters them regenerates the snapshot in the same commit and says why:
 
    ```
    python tests/snapshots.py

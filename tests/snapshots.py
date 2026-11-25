@@ -1,9 +1,10 @@
 """Regression snapshots: what the code returns now for a fixed set of inputs.
 
 A snapshot is a change detector, not a statement that the numbers are right.  Two kinds:
-- stable: parts that no planned change should alter (HBF, HLINPROF for H alpha - H gamma);
-- legacy: parts that planned changes will alter on purpose (WCALC default with the neutral
-  term, HPROFL/HLINOP Stark profiles, HBOP opacities).  A change that alters them must
+- stable: parts that no planned change should alter (HBF, HLINPROF for H alpha - H gamma,
+  WCALC by default and with the Hummer & Mihalas excluded volume);
+- legacy: parts that planned changes will alter on purpose (HPROFL/HLINOP Stark profiles and
+  the HBOP opacities that use them).  A change that alters them must
   regenerate the snapshot (python tests/snapshots.py) in the same commit and say why.
 """
 import json
@@ -31,7 +32,9 @@ HBOP_WAVES = [3640.0, 3655.0, 3670.0, 3700.0, 3750.0, 3800.0, 3889.0, 3970.0, 41
 def compute():
     snap = {}
     snap["hbf"] = {"kind": "stable", "inputs": HBF_INPUTS, "values": H.hbf(HBF_INPUTS).tolist()}
-    snap["wcalc"] = {"kind": "legacy", "inputs": WCALC_CASES, "values": H.wcalc(WCALC_CASES).tolist()}
+    snap["wcalc"] = {"kind": "stable", "inputs": WCALC_CASES, "values": H.wcalc(WCALC_CASES).tolist()}
+    snap["wcalc_hm88"] = {"kind": "stable", "excluded_volume_scale": 1.0, "inputs": WCALC_CASES,
+                          "values": H.wcalc(WCALC_CASES, scale=1.0).tolist()}
     prof = {}
     for nlo, nup, T, ne, nh, nhe in PROFILE_SETS:
         w0 = H.line_centre(nlo, nup)
@@ -47,12 +50,13 @@ def compute():
     lines = [(2, m, H.line_centre(2, m)) for m in range(3, 31)] + \
             [(3, m, H.line_centre(3, m)) for m in range(4, 31)] + \
             [(4, m, H.line_centre(4, m)) for m in range(5, 31)]
-    hb = {}
-    for label, nh, nhe, ne, T in HBOP_CONDITIONS:
-        tot, cont = H.hbop(nh, nhe, ne, T, H.doppler(T), lines, HBOP_WAVES)
-        hb[label] = {"total": tot.tolist(), "contin": cont.tolist()}
-    snap["hbop"] = {"kind": "legacy", "waves_A": HBOP_WAVES,
-                    "lines": "Balmer, Paschen, Brackett to n_up = 30, vacuum centres", "values": hb}
+    for key, scale in (("hbop", None), ("hbop_hm88", 1.0)):
+        hb = {}
+        for label, nh, nhe, ne, T in HBOP_CONDITIONS:
+            tot, cont = H.hbop(nh, nhe, ne, T, H.doppler(T), lines, HBOP_WAVES, scale=scale)
+            hb[label] = {"total": tot.tolist(), "contin": cont.tolist()}
+        snap[key] = {"kind": "legacy", "excluded_volume_scale": scale, "waves_A": HBOP_WAVES,
+                     "lines": "Balmer, Paschen, Brackett to n_up = 30, vacuum centres", "values": hb}
     return snap
 
 

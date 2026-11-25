@@ -28,3 +28,17 @@ def test_lines_add_to_the_continuum(cond):
     _, cont0 = H.hbop(nh, nhe, ne, T, H.doppler(T), [], waves)
     np.testing.assert_allclose(cont, cont0, rtol=1e-6)
     assert np.all(tot > cont)
+
+
+def test_changing_the_excluded_volume_recomputes_the_populations():
+    """HBOP caches level populations for unchanged (NH, NHE, NE, T).  Changing the excluded-volume
+    setting between calls at the same conditions must give the same result as a fresh run."""
+    _, nh, nhe, ne, T = HBOP_CONDITIONS[0]
+    lines = [(2, m, H.line_centre(2, m)) for m in range(3, 31)]
+    w = 3700.0
+    seq = [1.0, 0.0, 1.0, 0.5, 0.0]
+    tot, cont = H.hbop(nh, nhe, ne, T, H.doppler(T), lines, [w] * len(seq), scale=seq)
+    for i, s in enumerate(seq):
+        t1, c1 = H.hbop(nh, nhe, ne, T, H.doppler(T), lines, [w], scale=s)
+        np.testing.assert_allclose([tot[i], cont[i]], [t1[0], c1[0]], rtol=1e-6)
+    assert abs(tot[0] / tot[1] - 1.0) > 0.05  # the setting matters here (17% at 3700 A)

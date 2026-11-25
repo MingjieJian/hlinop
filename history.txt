@@ -18,3 +18,5 @@ History:
 12 July 2023: Small improvement to LOGINT - log-linear interpolation performs better than log-log.
 
 17 Dec 2025:  Added hbop_auto.f, and some small changes to hbop.f.  (Note these changes were actually made a year earlier, took some time to post to github;)).
+
+25 Nov 2026: hbop.f - the neutral-perturber (excluded-volume) part of the occupation probability in WCALC is now switchable with CALL HBOP_SET_EXCLUDED_VOLUME(SCALE), which multiplies the excluded volume of neutral H and He (SCALE = 1: Hummer & Mihalas hard spheres as before; SCALE = 0: off). The default is now off. The charged-particle part is unchanged. HBOP recomputes the populations when the setting changes. Test suite and GitHub Actions CI added in tests/ (Mingjie Jian).
