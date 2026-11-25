@@ -15,7 +15,7 @@ Requirements:
 
 The drivers are compiled into a temporary directory under `/tmp` for each run. `hlinprof.f` reads its table file names from `CHARACTER*80` parameters, so the path has to be short. Set `HLINOP_TEST_BUILD=/some/short/dir` to keep the build. A full run takes a few seconds.
 
-GitHub Actions runs the same command on Linux and macOS (`.github/workflows/tests.yml`).
+GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux for every pull request and every push to `develop`/`master`, and on macOS for pushes to `develop`/`master` only (macOS runners can queue for a long time).
 
 ## Three kinds of test
 
