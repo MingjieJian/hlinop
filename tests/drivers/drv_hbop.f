@@ -4,7 +4,7 @@ C         then NLINES lines:  NLO NUP WAVEH
 C         then one case per line:  WAVE SCALE MODE STARK
 C         SCALE >= 0: CALL HBOP_SET_EXCLUDED_VOLUME(SCALE) first
 C         MODE  >= 0: CALL HBOP_SET_LINE_PROFILE(MODE) first
-C         STARK >= 0: CALL HLINOP_SET_STARK(STARK) first
+C         STARK >= 0: CALL HLINOP_SET_CONVOLUTION(STARK) first
 C         negative values leave the setting as it is (defaults on start-up)
 C  stdout: WAVE TOTAL CONTIN   (cm^-1)
       PROGRAM DRVHBOP
@@ -20,7 +20,7 @@ C  stdout: WAVE TOTAL CONTIN   (cm^-1)
    10 READ(*,*,END=99) WAVE, SCALE, MODE, ISTK
       IF (SCALE.GE.0.) CALL HBOP_SET_EXCLUDED_VOLUME(SCALE)
       IF (MODE.GE.0) CALL HBOP_SET_LINE_PROFILE(MODE)
-      IF (ISTK.GE.0) CALL HLINOP_SET_STARK(ISTK)
+      IF (ISTK.GE.0) CALL HLINOP_SET_CONVOLUTION(ISTK)
       CALL HBOP(WAVE, N, NLO, NUP, WAVEH, NH, NHE, NE, T, DOP,
      *          NPOP, 0, TOTAL, CONTIN)
       WRITE(*,'(1P,3E25.16)') WAVE, TOTAL, CONTIN

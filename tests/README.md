@@ -46,11 +46,12 @@ GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux fo
 
 ### Covered by `xfail` tests
 
-- **`HPROFL` adds the broadening mechanisms outside the core.** Inside the core it uses the dominant mechanism (Doppler, Lorentz or Stark); outside the core it adds all of them. Where Doppler broadening dominates the core, this adds 2–39% to the area. Examples: Hγ, H8, H10, H14 and Pa10 at 5000 K and n_e = 1e12, and Hγ at 6300 K and 1e14. `STARK1` itself has unit area.
+None at present.
 
 ### Fixed (Nov 2026)
 
-- **`STARK1` added the ion quasistatic, electron quasistatic and electron impact parts instead of convolving them.** Areas were 1.74–2.14. The parts are now convolved (B: norm(ion) ⊛ norm(impact + electron wing)), with mode 0 keeping the old code. The tests compare with Stehlé & Hutcheon (n_up ≥ 8; HWHM and peak within 10%) and with Lemke VCS for Brackett (within 15%).
+- **`HPROFL` added the broadening mechanisms outside the core.** Inside the core it used the dominant mechanism; outside it, it added all of them. Where Doppler broadening dominated, this added 2–39% to the area and left Stark broadening out of the core. The mechanisms are now convolved (`HPCONV`). Areas are 1 to 0.1%. The end-to-end test compares `HPROFL` with the Doppler-convolved Stehlé & Hutcheon profiles (within 10%).
+- **`STARK1` added the ion quasistatic, electron quasistatic and electron impact parts instead of convolving them.** Areas were 1.74–2.14. The parts are now convolved (B: norm(ion) ⊛ norm(impact + electron wing)), with `HLINOP_SET_CONVOLUTION(0)` keeping the old code. The tests compare with Stehlé & Hutcheon (n_up ≥ 8; HWHM and peak within 10%) and with Lemke VCS for Brackett (within 15%).
 
 ### Found while writing the tests, not yet covered
 

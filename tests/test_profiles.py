@@ -1,7 +1,7 @@
 """Line profiles from hlinop.f: STARK1, HPROFL, HLINOP and the cutoff weight HLINOP applies (HLCUT).
 
 A line profile must integrate to one over frequency (per Hz).  HLINPROF: test_hlinprof.py.
-STARK1 (default HLINOP_SET_STARK(1)) convolves the ion quasistatic profile with the electron
+With HLINOP_SET_CONVOLUTION(1) (default) STARK1 convolves the ion quasistatic profile with the electron
 profile (impact core plus quasistatic electron wing); mode 0 is the earlier code, which added
 the parts.
 """
@@ -21,10 +21,6 @@ DATA = Path(__file__).resolve().parent / "data"
 CDS = [e for e in json.loads((DATA / "stehle_cds_subset.json").read_text()) if e["nlo"] > 1 and e["nup"] >= 8]
 VCS = json.loads((DATA / "lemke_vcs_brackett.json").read_text())
 
-# Doppler-dominated cores: HPROFL takes the Doppler profile inside the core and ADDS the Stark and
-# Lorentz profiles outside it, which adds area (to be fixed in HPROFL; STARK1 itself is normalised)
-HPROFL_COMBINATION = {(2, 5, 5000.0, 1e12), (2, 5, 6300.0, 1e14), (2, 8, 5000.0, 1e12),
-                      (2, 10, 5000.0, 1e12), (2, 14, 5000.0, 1e12), (3, 10, 5000.0, 1e12)}
 
 
 def _ids(cases):
@@ -57,21 +53,10 @@ def test_stark1_has_unit_area(case):
     assert abs(_area(w, s) - 1.0) < 0.01
 
 
-def _hprofl_params():
-    out = []
-    for c in PROFILE_CASES:
-        marks = []
-        if c[:4] in HPROFL_COMBINATION:
-            marks = [pytest.mark.known_issue,
-                     pytest.mark.xfail(reason="HPROFL uses the Doppler profile inside a Doppler-dominated core "
-                                              "and adds the Stark and Lorentz profiles outside it; areas 1.02-1.39 "
-                                              "here.  Fix: convolve in HPROFL.", strict=True, raises=AssertionError)]
-        out.append(pytest.param(c, marks=marks, id=_ids([c])[0]))
-    return out
-
-
-@pytest.mark.parametrize("case", _hprofl_params())
+@pytest.mark.parametrize("case", PROFILE_CASES, ids=_ids(PROFILE_CASES))
 def test_hprofl_has_unit_area(case):
+    """HPROFL = Doppler (*) Lorentz (*) Stark (HPCONV).  Measured 0.9994-1.0002.  The earlier
+    combination (HLINOP_SET_CONVOLUTION(0)) gave 1.02-1.39 where Doppler dominates the core."""
     nlo, nup, T, ne, nh, nhe = case
     w0 = H.line_centre(nlo, nup)
     w = H.detuning_grid(w0, rel_max=0.25)
@@ -111,7 +96,7 @@ def test_lyman_alpha_keeps_the_earlier_stark_profile():
     w0 = H.line_centre(1, 2)
     w = w0 + np.array([0.0, 0.1, 1.0, 10.0, -1.0, -10.0])
     a = H.profile(1, 2, 8000.0, 1e15, 1e17, 1e16, H.doppler(8000.0), w, stark1=True)
-    b = H.profile(1, 2, 8000.0, 1e15, 1e17, 1e16, H.doppler(8000.0), w, stark1=True, stark=0)
+    b = H.profile(1, 2, 8000.0, 1e15, 1e17, 1e16, H.doppler(8000.0), w, stark1=True, convolution=0)
     np.testing.assert_array_equal(a, b)
 
 
@@ -138,3 +123,54 @@ def test_hlinop_is_hprofl_times_hlcut(line):
     p, q, c = H.profile(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, with_cut=True)
     np.testing.assert_allclose(q, p * c, rtol=1e-6, atol=1e-35)
     assert np.any(c == 0.0)
+
+
+@pytest.mark.parametrize("entry", CDS, ids=["%d-%d_ne%.0e_T%g" % (e["nlo"], e["nup"], e["ne"], e["T"]) for e in CDS])
+def test_hprofl_matches_stehle_hutcheon_with_doppler(entry):
+    """End to end: HPROFL with thermal Doppler broadening only (no microturbulence, no H or He
+    perturbers) against the Doppler-convolved profiles of Stehle & Hutcheon (1999), whose
+    plasma is pure hydrogen: HWHM and peak within 10%."""
+    nlo, nup, T, ne, f0 = entry["nlo"], entry["nup"], entry["T"], entry["ne"], entry["f0"]
+    w0 = H.line_centre(nlo, nup)
+    a, sd = np.array(entry["alpha"]), np.array(entry["sdop"])
+    ref = sd / f0
+    hw_ref = _hwhm(a * f0, ref)
+    x = np.linspace(0.0, 20.0 * hw_ref, 4001)
+    p, _ = H.profile(nlo, nup, T, ne, 0.0, 0.0, H.doppler(T, vturb_kms=0.0), w0 + x)
+    p = p * H.C_ANGSTROM / (w0 + x) ** 2
+    assert abs(np.log(_hwhm(x, p) / hw_ref)) < np.log(1.10)
+    assert abs(np.log(p[0] / ref[0])) < np.log(1.10)
+
+
+def test_hprofl_doppler_limit():
+    """At negligible electron density and no perturbers the profile is the Doppler Gaussian
+    (single component for n_up > 10)."""
+    nlo, nup, T = 2, 12, 6000.0
+    dop = H.doppler(T)
+    w0 = H.line_centre(nlo, nup)
+    nu0 = H.C_ANGSTROM / w0
+    dnu = np.array([0.0, 0.5, 1.0, 1.5, -1.0]) * dop * nu0
+    w = H.C_ANGSTROM / (nu0 + dnu)
+    p, _ = H.profile(nlo, nup, T, 1e6, 0.0, 0.0, dop, w, wave0=w0)
+    gauss = np.exp(-(dnu / (dop * nu0)) ** 2) / (np.sqrt(np.pi) * dop * nu0)
+    np.testing.assert_allclose(p, gauss, rtol=0.01)
+
+
+def test_hprofl_stark_limit():
+    """Where Stark broadening dominates, HPROFL follows STARK1."""
+    nlo, nup, T, ne = 2, 22, 6300.0, 1e15
+    w0 = H.line_centre(nlo, nup)
+    w = w0 + np.array([0.0, 2.0, 5.0, 10.0, -5.0])
+    p, _ = H.profile(nlo, nup, T, ne, 0.0, 0.0, H.doppler(T), w, wave0=w0)
+    s = H.profile(nlo, nup, T, ne, 0.0, 0.0, H.doppler(T), w, wave0=w0, stark1=True)
+    np.testing.assert_allclose(p, s, rtol=0.03)
+
+
+def test_lyman_alpha_keeps_the_earlier_profile():
+    """Lyman alpha (HPROFL and STARK1) is the same in both modes (to be revisited)."""
+    w0 = H.line_centre(1, 2)
+    w = w0 + np.array([0.0, 0.1, 1.0, 10.0, -1.0, -10.0, -100.0])
+    a, _ = H.profile(1, 2, 8000.0, 1e15, 1e17, 1e16, H.doppler(8000.0), w)
+    b, _ = H.profile(1, 2, 8000.0, 1e15, 1e17, 1e16, H.doppler(8000.0), w, convolution=0)
+    np.testing.assert_array_equal(a, b)
+
