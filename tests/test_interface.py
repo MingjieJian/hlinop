@@ -1,6 +1,6 @@
 """Interfaces for synthesis codes: table files at run time (HLINPROF_SET_FILES), which profile
-HLINPROF returned (HLINPROF_SOURCE), and HBOP's populations and bound-free opacity on their own
-(HBOP_LEVELS, HBOP_BF)."""
+HLINPROF returned (HLINPROF_SOURCE), informational messages (HLINPROF_SET_MESSAGES), and HBOP's
+populations and bound-free opacity on their own (HBOP_LEVELS, HBOP_BF)."""
 import os
 import subprocess
 
@@ -30,9 +30,7 @@ def test_set_files_uses_the_given_table(tmp_path):
     p0, _ = H.files(None, _calls())
     p1, _ = H.files(other, _calls())
     np.testing.assert_array_equal(p0, p1)
-    txt = str(tmp_path / "missing.dat") + "\n" + "%d %d %.10f %.6e %.6e %.6e %.6e %.6e %.10f\n" % _calls()[0]
-    r = subprocess.run([str(H.build_dir() / "drv_files")], input=txt, capture_output=True, text=True)
-    assert r.returncode != 0 or "did not find" in r.stdout + r.stderr
+    r = H.files(tmp_path / "missing.dat", _calls()[:1], raw=True)
     assert "did not find" in r.stdout + r.stderr
 
 
@@ -46,6 +44,18 @@ def test_source_reports_the_fallback_to_hlinop():
     assert np.all(cold == 0)
 
 
+def test_messages_can_be_switched_off():
+    """By default HLINPROF prints which tables it uses; HLINPROF_SET_MESSAGES(0) silences that
+    (results unchanged)."""
+    calls = _calls()
+    on = H.files(None, calls, raw=True)
+    off = H.files(None, calls, messages=0, raw=True)
+    assert "Will use Stehle" in on.stdout and "Using Hlinop" in on.stdout
+    assert "Will use" not in off.stdout and "Using Hlinop" not in off.stdout
+    num = lambda r: [ln for ln in r.stdout.splitlines() if ln.strip()[:1].isdigit() or ln.strip()[:1] == "-"]
+    assert num(on) == num(off)
+
+
 @pytest.mark.parametrize("cond", HBOP_CONDITIONS, ids=[c[0] for c in HBOP_CONDITIONS])
 def test_hbop_bf_equals_the_continuum_of_hbop(cond):
     """HBOP_BF with the populations of HBOP_LEVELS is HBOP's continuous opacity, bit for bit; the
@@ -56,3 +66,12 @@ def test_hbop_bf_equals_the_continuum_of_hbop(cond):
     np.testing.assert_array_equal(out[:, 0], out[:, 1])
     assert abs(s - 1.0) < 1e-5
     assert 0.0 < w15 < w1 <= 1.0
+
+
+@pytest.mark.parametrize("src", ["hlinop.f", "hlinprof.f", "hbop.f"])
+def test_compiles_without_legacy_options(src, tmp_path):
+    """Codes such as SME compile these files without -std=legacy (newer gfortran then rejects,
+    e.g., a scalar passed for an array argument)."""
+    r = subprocess.run([H.FC, "-c", "-O2", "-I%s" % H.build_dir(), str(H.ROOT / src),
+                        "-o", str(tmp_path / "x.o")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-2000:]

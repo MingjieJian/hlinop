@@ -5,6 +5,7 @@ C     SUBROUTINE HLINPROF(WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,
 C    *                   H1FRC,HE1FRC,DOP,PROF)
 C     SUBROUTINE HLINPROF_SET_FILES(STEFILE,SELFFILE,VCSFILE)
 C     INTEGER FUNCTION HLINPROF_SOURCE()
+C     SUBROUTINE HLINPROF_SET_MESSAGES(MODE)
 C     BLOCK DATA HLPRFD
 C     REAL*8 FUNCTION HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,...)
 C     REAL*8 FUNCTION HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,...)
@@ -78,7 +79,7 @@ C
       REAL*8 WAVE,WAVE0,DEL,HHLIN
       REAL*8 KRNSTEP,WLKRN(NKMAX),KERN(NKMAX),KMAX,WV2
       REAL*8 DEL1,DDEL,XNEXP,F1,HLIND
-      REAL*8 STARKD
+      REAL*8 STARKD,PRA(1),DELA(1)
       REAL*8 LOR,HWID,RES
       REAL*8 GAML,AEXT,DOPTH,HLPCONV,HLYAPRF
       INTEGER CONVOLUTION_MODE
@@ -93,6 +94,8 @@ C  table files in use: from DATA.FILES, or set with HLINPROF_SET_FILES
       COMMON /HLFILN/ FSTE,FSELF,FVCS
       INTEGER NFSET,ISRC,LFSET
       COMMON /HLFILC/ NFSET,ISRC
+      INTEGER IMSG
+      COMMON /HLMSG/ IMSG
       EXTERNAL HLPRFD
 C
       SAVE FIRST,HF,HSF,HVF,LFSET
@@ -136,7 +139,7 @@ C
      ;           (ISTARK.EQ.1).AND.(ISELF.NE.1)))) THEN
         IF (FIRST) THEN
           FIRST = .FALSE.
-          PRINT*,' Using Hlinop code!'
+          IF (IMSG.EQ.1) PRINT*,' Using Hlinop code!'
         ENDIF
         ISRC = 0
         PROF = HLINOP(WAVE,NLOW,NUP,WAVE0,TEMP,XXNE,H1FRC,
@@ -227,7 +230,10 @@ C
           ENDIF
         END IF
         IF (ISTARK .EQ. 2) THEN
-          CALL VCS(HLIND,XNED,TD,DEL,1,NLOW,NUP,HVF)
+C  (VCS takes arrays of detunings and profile values)
+          DELA(1) = DEL
+          CALL VCS(PRA,XNED,TD,DELA,1,NLOW,NUP,HVF)
+          HLIND = PRA(1)
           ISRC = 2
           IF (HLIND.LT.0.) THEN
             ISRC = 0
@@ -328,7 +334,9 @@ C
             CALL STEHLE(HF,WAVE0+DEL1,WAVE0,TEMP,XXNE,NLOW,NUP,STARK)
           END IF
           IF (ISTARK .EQ. 2) THEN
-            CALL VCS(STARKD,XNED,TD,DEL1,1,NLOW,NUP,HVF)
+            DELA(1) = DEL1
+            CALL VCS(PRA,XNED,TD,DELA,1,NLOW,NUP,HVF)
+            STARKD = PRA(1)
             STARK = STARKD
           END IF
           F1 = KERN(IKRN) * STARK
@@ -401,14 +409,32 @@ C
       END
 
 C***********************************************************************
+      SUBROUTINE HLINPROF_SET_MESSAGES(MODE)
+C
+C  MODE = 1 (default): HLINPROF prints which tables it uses ("Will use
+C  Stehle's tables ...", " Using Hlinop code!") at the first use; 
+C  MODE = 0: no such messages (error messages are always printed).
+C
+      INTEGER MODE
+      INTEGER IMSG
+      COMMON /HLMSG/ IMSG
+      EXTERNAL HLPRFD
+      IMSG = MODE
+      RETURN
+      END
+
+C***********************************************************************
       BLOCK DATA HLPRFD
-C  No table files set at run time; no HLINPROF call yet.
+C  No table files set at run time; no HLINPROF call yet; messages on.
       CHARACTER*592 FSTE,FSELF,FVCS
       COMMON /HLFILN/ FSTE,FSELF,FVCS
       INTEGER NFSET,ISRC
       COMMON /HLFILC/ NFSET,ISRC
+      INTEGER IMSG
+      COMMON /HLMSG/ IMSG
       DATA FSTE,FSELF,FVCS /3*' '/
       DATA NFSET,ISRC /0,-1/
+      DATA IMSG /1/
       END
 
       REAL*8 FUNCTION HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,
@@ -718,6 +744,9 @@ C  the temperature and density part of the last call
      *     LALD,LSPD,
      *     LLINE,LITEMP,LINE_,LJMAX,LTEMP,LXXNE,LDT1,LDT2,LDNE1,LDNE2,
      *     LF0A,LF0B
+      INTEGER IMSG
+      COMMON /HLMSG/ IMSG
+      EXTERNAL HLPRFD
       DATA FIRST/.TRUE./,LINDEX/10000*0/,LLINE/0/
       EXP10(X)=EXP(2.30258509299405E0*X)
 C
@@ -823,7 +852,7 @@ C  (separate test: .AND. need not short-circuit, ALPHA(0) out of bounds)
         SLOPE(K,I,J,L)=STHPD(K,NA,ALPHA(1,I,J,L),SPROF(1,I,J,L))
    25   CONTINUE
    26   CONTINUE
-        IF(LINDEX(NLOW,NUP).GT.0) WRITE(*,*) 
+        IF(LINDEX(NLOW,NUP).GT.0.AND.IMSG.EQ.1) WRITE(*,*) 
      *    'Will use Stehle''s tables for Hydrogen line profiles'
       END IF
 C
@@ -1157,6 +1186,9 @@ C
       CHARACTER HFILE*(*)
       SAVE T,NH,F0,MALPHA,MSPROF,PALPHA,PSPROF,PNALPHA,MNALPHA,
      *     NPROFS,NTEMP,NNH,NLINE,FIRST,LINDEX
+      INTEGER IMSG
+      COMMON /HLMSG/ IMSG
+      EXTERNAL HLPRFD
       DATA FIRST/.TRUE./,LINDEX/10000*0/
       PARAMETER (SQRTPI=1.77245385)
       REAL*8 DEXP10,X
@@ -1238,7 +1270,7 @@ C
 C
 C  IF OUR LINE EXIST THEN WRITE OUT FIRST TIME
 C
-        IF(LINDEX(NLOW,NUP).GT.0) WRITE(*,*) 
+        IF(LINDEX(NLOW,NUP).GT.0.AND.IMSG.EQ.1) WRITE(*,*) 
      *    'Will use PB''s tables for Hydrogen line profiles'
 C
       END IF  ! ENDS PART ONLY DONE FIRST TIME
@@ -1735,7 +1767,8 @@ C     CALCULATES VIDAL COOPER AND SMITH PROFILES FOR FIRST FOUR BALMER
 C     LINES.  THEY ARE RETURNED IN ANGSTROM UNITS.                     
 C     ASSUMES RAW PROFILES ARE IN ALPHA UNITS.                      
       IMPLICIT REAL*8 (A-H,O-Z)
-      DIMENSION PR(40),DEL(40)                                       
+C  (assumed size: II values; was PR(40), DEL(40))
+      DIMENSION PR(*),DEL(*)
 C     DIMENSION ALPHA(40),PRALPH(40)                                  
       DIMENSION PRALPH(40)                                   
       DIMENSION SVCS(6,17,40,4),ALPHA0(4)  

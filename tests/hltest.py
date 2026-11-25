@@ -213,11 +213,16 @@ def hlckey(keys):
     return run("drv_hlckey", "".join("%.17g\n" % k for k in keys)).astype(int)
 
 
-def files(stehle_path, calls):
-    """HLINPROF with the Stehle table set by HLINPROF_SET_FILES (None: the DATA.FILES default).
-    calls: (nlo, nup, wave0, T, ne, nh, nhe, dop, wave).  Returns PROF (per A) and HLINPROF_SOURCE."""
+def files(stehle_path, calls, messages=None, raw=False):
+    """HLINPROF with the Stehle table set by HLINPROF_SET_FILES (None: the DATA.FILES default) and
+    the message mode set by HLINPROF_SET_MESSAGES (None: not called).  calls: (nlo, nup, wave0, T,
+    ne, nh, nhe, dop, wave).  Returns PROF (per A) and HLINPROF_SOURCE, or the raw output."""
     head = ("-" if stehle_path is None else str(stehle_path)) + "\n"
-    out = run("drv_files", head + "".join("%d %d %.10f %.6e %.6e %.6e %.6e %.6e %.10f\n" % c for c in calls))
+    head += "%d\n" % (-1 if messages is None else messages)
+    txt = head + "".join("%d %d %.10f %.6e %.6e %.6e %.6e %.6e %.10f\n" % c for c in calls)
+    if raw:
+        return subprocess.run([str(build_dir() / "drv_files")], input=txt, capture_output=True, text=True)
+    out = run("drv_files", txt)
     return out[:, 0], out[:, 1].astype(int)
 
 
