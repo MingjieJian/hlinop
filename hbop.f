@@ -24,6 +24,8 @@ C  ------------------
 C 
 C  REAL HBOP(WAVE,N,NLO,NUP,WAVEH,NH,NHE,NE,T,DOP,NPOP,NL,TOTAL,CONTIN)   
 C  REAL FUNCTION WCALC(NH, NE, NHW, NS, TEMP)	
+C  SUBROUTINE HBOP_SET_EXCLUDED_VOLUME(SCALE)
+C  BLOCK DATA HBOPEVD
 C  REAL FUNCTION HBF(WAVE,NLO)
 C  SUBROUTINE LOGINT(X,Y,N,XI,YI)
 C  SUBROUTINE POLINT(XA,YA,N,X,Y,DY)
@@ -42,6 +44,8 @@ C  Variables to be set / aware of before use:
 C  ------------------------------------------
 C
 C  HBOP  : NLEVELS, NBF
+C  WCALC : neutral-perturber excluded volume, set at run time with
+C          CALL HBOP_SET_EXCLUDED_VOLUME(SCALE); default 0 (off)
 C  HLINOP: CUTNEXT, REFLECT
 C  HPROFL: RAYLCUT
 C
@@ -106,8 +110,13 @@ C            equal to the highest level in the line list and NL.
 C  nbf     = highest level for which the bound-free component is 
 C            accounted for (limited to 15 at present). 
 C
+C  The neutral-perturber (excluded-volume) part of the occupation 
+C  probability is off by default; see HBOP_SET_EXCLUDED_VOLUME.
+C
 C  Paul Barklem, Uppsala, August 2003
 C  Dec 2024, error catch for NUP > NLEVELS added
+C  Nov 2026, excluded-volume switch (HBOP_SET_EXCLUDED_VOLUME); the 
+C            populations are recomputed when the setting changes
 C
       IMPLICIT NONE
       INTEGER N, NLO(*), NUP(*), NLEVELS, I, J, NBF, NL, FF,FN
@@ -123,8 +132,11 @@ C
       REAL*8 WAVE, WAVEH(*), REDCUT
       REAL*8 EHYD(NLEVELS), CONTH(NLEVELS), WCALC, D, WSTAR, TAPER
       LOGICAL FIRST
+      REAL EXCLUDED_VOLUME_SCALE, EVSL
+      COMMON /HBOPEV/ EXCLUDED_VOLUME_SCALE
+      EXTERNAL HBOPEVD
       SAVE 
-      DATA FIRST/.TRUE./
+      DATA FIRST/.TRUE./, EVSL/-1./
       PARAMETER (H=6.62607E-27, C=2.9979E10, K=1.38065E-16)
       PARAMETER (IONH=2.17991e-11) 
       PARAMETER (HC=H*C)
@@ -160,7 +172,8 @@ C
 C  Create population array NP for all levels 
 C
       IF ((ABS(NH-NHL).LT.1E-3*NH).AND.(ABS(NHE-NHEL).LT.1E-3*NHE).AND.
-     +   (ABS(NE-NEL).LT.1E-3*NE).AND.(ABS(T-TL).LT.1E-3*T))
+     +   (ABS(NE-NEL).LT.1E-3*NE).AND.(ABS(T-TL).LT.1E-3*T).AND.
+     +   (EXCLUDED_VOLUME_SCALE.EQ.EVSL))
      *   GOTO 16
       Z = 0.
       KT = K*T
@@ -175,6 +188,7 @@ C
       NHEL = NHE
       NEL = NE
       TL = T
+      EVSL = EXCLUDED_VOLUME_SCALE
  16   CONTINUE
 C
       DO 20 I = 1, NLEVELS
@@ -255,6 +269,10 @@ C  which is a fit to detailed calculation including correlations,
 C  thus the temperature dependence
 C
 C  Sizes of neutral atoms adopted are sqrt(<r^2>)
+C
+C  The excluded volume of the neutral perturbers is multiplied by
+C  EXCLUDED_VOLUME_SCALE (set with HBOP_SET_EXCLUDED_VOLUME):
+C  0 = neutral term off (default), 1 = Hummer & Mihalas eq 4.71.
 C  
 C  Coded by Paul Barklem and Kjell Eriksson, Aug 2003
 C 	
@@ -262,6 +280,8 @@ C
       REAL NH, NE, NHE, NS, TEMP
       REAL*8 IONH, A0, E, PI, K, CHI, RIH, NEUTR, ION, NS2, NS4 
       REAL*8 F, A, BETAC, X, WNEUTR, WION, X1, X2      
+      REAL EXCLUDED_VOLUME_SCALE
+      COMMON /HBOPEV/ EXCLUDED_VOLUME_SCALE
       PARAMETER (IONH=2.17991E-11) 
       PARAMETER (A0=5.29177E-9)
       PARAMETER (E=4.803207E-10) 
@@ -277,7 +297,7 @@ C
       X1=RIH + 1.73*A0
       X2=RIH + 1.02*A0
       NEUTR=NH*X1*X1*X1 + NHE*X2*X2*X2
-      WNEUTR = DEXP(-4.18879 * NEUTR)  ! 4.18879 is 4*pi/3
+      WNEUTR = DEXP(-4.18879 * EXCLUDED_VOLUME_SCALE * NEUTR)  ! 4*pi/3
 C
 C  Charged perturbers
 C      
@@ -301,6 +321,44 @@ c      WION = DEXP(-4.*PI/3. * (ION))
 C      
       WCALC = WION * WNEUTR 
       RETURN
+      END
+
+
+C***********************************************************************
+
+      SUBROUTINE HBOP_SET_EXCLUDED_VOLUME(SCALE)
+C
+C  Sets the neutral-perturber part of the occupation probability used 
+C  by WCALC and hence by HBOP (lines, level populations and the 
+C  dissolved-level pseudo-continuum).
+C
+C  SCALE multiplies the excluded volume of neutral H and He perturbers
+C  (hard spheres, Hummer & Mihalas 1988 eq 4.71):
+C     SCALE = 0.  neutral term off (default if this is never called)
+C     SCALE = 1.  original hard-sphere formula of Hummer & Mihalas
+C  Values in between scale the volume (the exponent of w_neutral).
+C  The charged-particle part is not affected.
+C
+C  Call it before HBOP; the setting stays until it is called again.
+C
+      REAL SCALE
+      REAL EXCLUDED_VOLUME_SCALE
+      COMMON /HBOPEV/ EXCLUDED_VOLUME_SCALE
+      EXTERNAL HBOPEVD
+      IF (SCALE.LT.0.) STOP 'HBOP_SET_EXCLUDED_VOLUME: SCALE < 0'
+      EXCLUDED_VOLUME_SCALE = SCALE
+      RETURN
+      END
+
+C***********************************************************************
+
+      BLOCK DATA HBOPEVD
+C
+C  Default: neutral-perturber excluded volume off.
+C
+      REAL EXCLUDED_VOLUME_SCALE
+      COMMON /HBOPEV/ EXCLUDED_VOLUME_SCALE
+      DATA EXCLUDED_VOLUME_SCALE /0./
       END
      
 

@@ -72,9 +72,11 @@ def run(prog, text):
     return np.array(rows, dtype=float)
 
 
-def wcalc(cases):
-    """cases: iterable of (NH, NE, NHE, NS, T)."""
-    txt = "".join("%.8e %.8e %.8e %.8e %.8e\n" % tuple(c) for c in cases)
+def wcalc(cases, scale=None):
+    """cases: iterable of (NH, NE, NHE, NS, T).  scale: excluded-volume scale passed to
+    HBOP_SET_EXCLUDED_VOLUME before each case; None = never call it (the code's default)."""
+    sc = -1.0 if scale is None else float(scale)
+    txt = "".join("%.8e %.8e %.8e %.8e %.8e %.8e\n" % (*c, sc) for c in cases)
     return run("drv_wcalc", txt)[:, 0]
 
 
@@ -142,10 +144,15 @@ def area_per_angstrom(waves, phi_lam):
     return float(np.trapezoid(p, w) if hasattr(np, "trapezoid") else np.trapz(p, w))
 
 
-def hbop(nh, nhe, ne, T, dop, lines, waves):
-    """HBOP total and continuous opacity (cm^-1); lines: iterable of (nlo, nup, waveh)."""
+def hbop(nh, nhe, ne, T, dop, lines, waves, scale=None):
+    """HBOP total and continuous opacity (cm^-1); lines: iterable of (nlo, nup, waveh).
+    scale: None (never call HBOP_SET_EXCLUDED_VOLUME), a number, or one number per wavelength
+    (all calls run in one process, in order)."""
     lines = list(lines)
+    waves = list(waves)
+    if scale is None or np.isscalar(scale):
+        scale = [-1.0 if scale is None else float(scale)] * len(waves)
     head = "%.6e %.6e %.6e %.6e %.6e %d\n" % (nh, nhe, ne, T, dop, len(lines))
     head += "".join("%d %d %.10f\n" % l for l in lines)
-    out = run("drv_hbop", head + "".join("%.10f\n" % w for w in waves))
+    out = run("drv_hbop", head + "".join("%.10f %.8e\n" % (w, s) for w, s in zip(waves, scale)))
     return out[:, 1], out[:, 2]

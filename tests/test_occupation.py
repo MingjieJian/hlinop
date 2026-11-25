@@ -38,12 +38,19 @@ def w_charged(ne, n, T):
 RTOL = 1e-3
 
 
-@pytest.mark.legacy
-def test_wcalc_matches_published_formulas_with_neutral_term():
-    """Current default: w = w_charged * w_neutral.  A planned change makes the neutral term
-    switchable (default off); this test then moves to the 'neutral on' setting."""
+def test_wcalc_default_has_no_neutral_term():
+    """Default (HBOP_SET_EXCLUDED_VOLUME never called): w = w_charged."""
     got = H.wcalc(WCALC_CASES)
-    ref = np.array([w_charged(ne, n, T) * w_neutral(nh, nhe, n) for nh, ne, nhe, n, T in WCALC_CASES])
+    ref = np.array([w_charged(ne, n, T) for nh, ne, nhe, n, T in WCALC_CASES])
+    np.testing.assert_allclose(got, ref, rtol=RTOL)
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.5, 0.0])
+def test_wcalc_excluded_volume_scale(scale):
+    """HBOP_SET_EXCLUDED_VOLUME(scale) multiplies the excluded volume (the exponent of
+    w_neutral): 1 = Hummer & Mihalas eq. 4.71, 0 = off."""
+    got = H.wcalc(WCALC_CASES, scale=scale)
+    ref = np.array([w_charged(ne, n, T) * w_neutral(nh, nhe, n) ** scale for nh, ne, nhe, n, T in WCALC_CASES])
     big = ref > 1e-30
     np.testing.assert_allclose(got[big], ref[big], rtol=RTOL)
     assert np.all(got[~big] < 1e-25)
