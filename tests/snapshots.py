@@ -55,10 +55,11 @@ def compute():
             [(3, m, H.line_centre(3, m)) for m in range(4, 31)] + \
             [(4, m, H.line_centre(4, m)) for m in range(5, 31)]
     # hbop: defaults (tabulated profiles, convolved Stark profiles for the other lines, no excluded
-    # volume); hbop_hlinop_profiles: HLINOP for all lines; hbop_original: HLINOP for all lines with
-    # the added Stark parts and the Hummer & Mihalas excluded volume, i.e. the code before Nov 2026
+    # volume); hbop_hlinop_profiles: HLINOP for all lines; hbop_legacy_settings: HLINOP for all lines
+    # with the earlier (added) profiles and the Hummer & Mihalas excluded volume - the physics of
+    # the code before Nov 2026, but with the later bug fixes (dissolution edge, NBF, NH)
     for key, scale, mode, convolution in (("hbop", None, None, None), ("hbop_hlinop_profiles", None, 0, None),
-                                    ("hbop_original", 1.0, 0, 0)):
+                                    ("hbop_legacy_settings", 1.0, 0, 0)):
         hb = {}
         for label, nh, nhe, ne, T in HBOP_CONDITIONS:
             tot, cont = H.hbop(nh, nhe, ne, T, H.doppler(T), lines, HBOP_WAVES, scale=scale, profile=mode,
