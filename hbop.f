@@ -28,6 +28,7 @@ C  SUBROUTINE HBOP_SET_EXCLUDED_VOLUME(SCALE)
 C  SUBROUTINE HBOP_SET_LINE_PROFILE(MODE)
 C  BLOCK DATA HBOPEVD
 C  REAL FUNCTION HBF(WAVE,NLO)
+C  REAL*8 FUNCTION HBNSTAR(WAVEV,NLO)
 C  SUBROUTINE LOGINT(X,Y,N,XI,YI)
 C  SUBROUTINE POLINT(XA,YA,N,X,Y,DY)
 C
@@ -126,6 +127,8 @@ C  Nov 2026, excluded-volume switch (HBOP_SET_EXCLUDED_VOLUME); the
 C            populations are recomputed when the setting changes
 C  Nov 2026, line broadening by H with the total H I density NH
 C            (was the ground-state population NP(1))
+C  Nov 2026, dissolved fraction from the code's own level energies
+C            in vacuum wavelengths (HBNSTAR)
 C  Nov 2026, line profiles from HLINPROF (Stehle & Hutcheon tables for
 C            Lyman beta and up, Balmer and Paschen to n_up = 30; HLINOP
 C            otherwise) with the HLINOP cutoffs; HBOP_SET_LINE_PROFILE
@@ -141,7 +144,7 @@ C
       REAL Z, H, C, HC, K, KT, LINE, SIGMA, CHI, SF
       REAL IONH, X, HFNM, FNM(NLEVELS,NLEVELS), HLINOP, HBF
       REAL TS, TF
-      REAL*8 WAVE, WAVEH(*), REDCUT
+      REAL*8 WAVE, WAVEH(*), REDCUT, WAVEV, HBNSTAR, AIRVAC
       REAL*8 EHYD(NLEVELS), CONTH(NLEVELS), WCALC, D, WSTAR, TAPER
       LOGICAL FIRST
       REAL EXCLUDED_VOLUME_SCALE, EVSL
@@ -246,6 +249,10 @@ C
 C  Compute the continuous components - sum over NBF lowest states
 C     
       CONTIN = 0.
+C  The continuum is computed in vacuum wavelengths; WAVE is in air 
+C  above 2000 A (as for the lines, see HLINOP)
+      WAVEV = WAVE
+      IF (WAVE.GT.2000.D0) WAVEV = AIRVAC(WAVE)
       DO 40 I = 1, NBF
 C
 C  Compute dissolved fraction for the wavelength for this lower level
@@ -261,16 +268,20 @@ CC      CHI = 0.
 CC      IF (WAVE.GT.(1.d8/CONTH(I))) THEN 
       D = 1.
       TAPER = 1.
-      X=1./(FLOAT(I)*FLOAT(I)) - HC/(WAVE*1.E-8*IONH)
+C  Effective quantum number n* of the dissolved upper state reached 
+C  from level I at this (vacuum) wavelength, from the same level 
+C  energies as the lines (Nov 2026; before, IONH = R_infinity was used,
+C  which put the n = 2 edge 2 A blueward of the series limit, and the 
+C  air wavelength was used as if in vacuum)
+      X = HBNSTAR(WAVEV, I)
       IF(X .GT. 0.) THEN
-        X = 1./SQRT(X)
         WSTAR = WCALC(NH, NE, NHE, X, T)
         D = 1.0-(WSTAR/W(I))
         REDCUT = 1.D8/(EHYD(I+1)-EHYD(I))
-        IF (WAVE .GT. REDCUT) TAPER = DEXP((REDCUT-WAVE)*1.D-2)
+        IF (WAVEV .GT. REDCUT) TAPER = DEXP((REDCUT-WAVEV)*1.D-2)
       ENDIF	
-      CHI = (NP(I) - NLTE(I)*DEXP(-HC/(WAVE*1E-8)/KT)) * 
-     *       D * HBF(WAVE, I) * TAPER
+      CHI = (NP(I) - NLTE(I)*DEXP(-HC/(WAVEV*1E-8)/KT)) * 
+     *       D * HBF(WAVEV, I) * TAPER
 CC      ENDIF
  40   CONTIN = CONTIN + CHI
 C
@@ -529,6 +540,47 @@ C
 
 
 C***********************************************************************
+      REAL*8 FUNCTION HBNSTAR(WAVEV, NLO)
+C
+C  Effective principal quantum number n* of the upper state reached 
+C  from level NLO by a photon of vacuum wavelength WAVEV (A), with the 
+C  level energies used for the lines (HLINOP, HBOP):
+C     1/n*^2 = (CONTH(NLO) - 1e8/WAVEV) / R_H,
+C  R_H = 109677.576 cm^-1.  Returns 0 blueward of the series limit 
+C  (photoionisation, no dissolution).
+C
+      IMPLICIT NONE
+      INTEGER NLO, I
+      REAL*8 WAVEV, Q, EHYD(100), CONTH(100)
+      LOGICAL FIRST
+      SAVE FIRST, CONTH
+      DATA FIRST/.TRUE./
+      IF (FIRST) THEN
+        EHYD(1) =      0.000D0
+        EHYD(2) =  82259.105D0
+        EHYD(3) =  97492.302D0
+        EHYD(4) = 102823.893D0
+        EHYD(5) = 105291.651D0
+        EHYD(6) = 106632.160D0
+        EHYD(7) = 107440.444D0
+        EHYD(8) = 107965.051D0
+        DO 1 I = 9, 100
+ 1      EHYD(I) = 109678.764D0 - 109677.576D0/(I*I)
+        DO 2 I = 1, 100
+ 2      CONTH(I) = 109678.764D0 - EHYD(I)
+        FIRST = .FALSE.
+      ENDIF
+      Q = CONTH(NLO) - 1.D8/WAVEV
+      IF (Q.LE.0.D0) THEN
+        HBNSTAR = 0.D0
+      ELSE
+        HBNSTAR = SQRT(109677.576D0/Q)
+      ENDIF
+      RETURN
+      END
+
+C***********************************************************************
+
       SUBROUTINE LOGINT(X, Y, N, XI, YI)
 C
 C  Does log interpolation and extrapolation of array Y

@@ -28,6 +28,7 @@ PROGRAMS = {
     "drv_hbop": ["hbop.f", "hlinprof.f", "hlinop.f"],
     "drv_hbf": ["hbop.f", "hlinprof.f", "hlinop.f"],
     "drv_hlinprof": ["hlinprof.f", "hlinop.f"],
+    "drv_nstar": ["hbop.f", "hlinprof.f", "hlinop.f"],
 }
 DATA = {"HFILE": "stehle_long.dat", "HSELFFILE": "bpo_self.grid.DEC", "HVCSFILE": "vcsbalmer.dat"}
 
@@ -170,3 +171,9 @@ def hbop(nh, nhe, ne, T, dop, lines, waves, scale=None, profile=None, convolutio
     out = run("drv_hbop", head + "".join("%.10f %.8e %d %d\n" % (w, float(s), int(m), int(k))
                                          for w, s, m, k in zip(waves, sc, md, sk)))
     return out[:, 1], out[:, 2]
+
+
+def nstar(cases):
+    """cases: iterable of (wave, nlo); returns array with columns wave, AIRVAC, VACAIR,
+    HBNSTAR(wave), HBNSTAR(AIRVAC(wave))."""
+    return run("drv_nstar", "".join("%.10f %d\n" % c for c in cases))

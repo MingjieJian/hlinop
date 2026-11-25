@@ -74,3 +74,23 @@ def test_tabulated_lines_are_cut_at_the_series_limit():
     w = np.array([3600.0, 3620.0, 3640.0])
     np.testing.assert_array_equal(_line_opacity(2, 10, w, None), 0.0)
     assert np.all(_line_opacity(2, 10, np.array([3700.0, 3790.0]), None) > 0)
+
+
+def test_dissolution_edge_is_the_series_limit():
+    """HBNSTAR gives n* from the code's level energies, 1/n*^2 = (CONTH(n) - sigma_vac)/R_H, and 0
+    blueward of the series limit; with HBOP's air-to-vacuum conversion the edge coincides with
+    the blue cut that HLINOP/HLCUT apply to the lines (series limit in air)."""
+    for nlo in (1, 2, 3, 4, 6, 10, 15):
+        limit_vac = 1e8 / (H.IONH_CM - H.level_energy(nlo))
+        waves = limit_vac * np.array([0.98, 0.99999, 1.00001, 1.01, 1.2, 1.5])
+        out = H.nstar([(w, nlo) for w in waves])
+        sig = 1e8 / waves
+        q = H.IONH_CM - H.level_energy(nlo) - sig
+        ref = np.where(q > 0, np.sqrt(H.RYDBERG_H / np.maximum(q, 1e-30)), 0.0)
+        np.testing.assert_allclose(out[:, 3], ref, rtol=1e-6)
+    # air: the edge is at VACAIR(limit) for the levels above 1 (as the line cut)
+    for nlo in (2, 3, 4):
+        limit_vac = 1e8 / (H.IONH_CM - H.level_energy(nlo))
+        cut_air = H.nstar([(limit_vac, nlo)])[0, 2]
+        out = H.nstar([(cut_air - 0.01, nlo), (cut_air + 0.01, nlo)])
+        assert out[0, 4] == 0.0 and out[1, 4] > 100.0

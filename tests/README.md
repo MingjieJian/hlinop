@@ -50,13 +50,13 @@ None at present.
 
 ### Fixed (Nov 2026)
 
+- **The dissolution edge in `HBOP` was in the wrong place.** n\* was computed with `IONH` (the infinite-mass Rydberg) instead of the code's own level energies (R_H), which put the n = 2 dissolution edge 2 Å blueward of the series limit. The air wavelength was also used as if it were in vacuum. `HBNSTAR` now uses the code's level energies, and the continuum is computed in vacuum wavelengths (`WAVE` is in air above 2000 Å, as for the lines). The edge now coincides with the series limit at which `HLINOP` cuts the lines.
 - **Self-broadening density.** `HBOP` passed the ground-state population `NP(1)` as the H I density for broadening by hydrogen; it now passes `NH`.
 - **`HPROFL` added the broadening mechanisms outside the core.** Inside the core it used the dominant mechanism; outside it, it added all of them. Where Doppler broadening dominated, this added 2–39% to the area and left Stark broadening out of the core. The mechanisms are now convolved (`HPCONV`). Areas are 1 to 0.1%. The end-to-end test compares `HPROFL` with the Doppler-convolved Stehlé & Hutcheon profiles (within 10%).
 - **`STARK1` added the ion quasistatic, electron quasistatic and electron impact parts instead of convolving them.** Areas were 1.74–2.14. The parts are now convolved (B: norm(ion) ⊛ norm(impact + electron wing)), with `HLINOP_SET_CONVOLUTION(0)` keeping the old code. The tests compare with Stehlé & Hutcheon (n_up ≥ 8; HWHM and peak within 10%) and with Lemke VCS for Brackett (within 15%).
 
 ### Found while writing the tests, not yet covered
 
-1. **The dissolution edge in `HBOP` is in the wrong place.** The effective quantum number n\* in `HBOP` uses `IONH = 2.17991e-11` erg, the infinite-mass Rydberg (109 737 cm⁻¹). The level energies use R_H = 109 678.764 cm⁻¹. So the n = 2 dissolution edge sits at 3644.98 Å, while the series limit from the code's own levels is at 3647.02 Å (both vacuum). In addition, `HLINOP` cuts non-Lyman lines at the series limit in air, while the `HBOP` continuum is computed in vacuum.
 2. **`NBF` disagrees with the header.** `NBF = 6`, so bound–free absorption from n ≥ 7 is omitted, while the header says the limit is 15.
 3. **`STARK1` cache key.** The old `STARK1` caches `C1CON`/`C2CON`, which depend on `WAVEH`, keyed on (N, M) only, so a call with the same (N, M) and a different line centre reuses stale values. It is still so in `STARK1L`, kept unchanged. `STARK1PARTS`, used by the convolved profile, keys on (N, M, `WAVEH`).
 4. **Undefined variable in `STARK1L`.** The old `STARK1`, now `STARK1L`, computes `T3NHE` from `HE1FRC`, which is not one of its arguments; the value is never used. It is removed in `STARK1PARTS`.
