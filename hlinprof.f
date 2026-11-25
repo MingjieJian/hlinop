@@ -5,6 +5,7 @@ C     SUBROUTINE HLINPROF(WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,
 C    *                   H1FRC,HE1FRC,DOP,PROF)
 C     REAL*8 FUNCTION HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,...)
 C     SUBROUTINE STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
+C     REAL*8 FUNCTION STHPCH(XL,K,NA,AA,SS), STHPD(J,NA,AA,SS)
 C     SUBROUTINE HGRID(HFILE,WAVE,WAVE0,TEMP,NHYD,NLOW,NUP,HLIN)
 C     SUBROUTINE HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,WIDTH)
 C     SUBROUTINE HE_PDWIDTH(NLOW,NUP,TEMP,HE1FRC,HEWID)
@@ -506,6 +507,9 @@ C
       INTEGER*2 LINDEX(100,100)
       LOGICAL FIRST
       CHARACTER HFILE*(*)
+      INTEGER CONVOLUTION_MODE
+      COMMON /HLCONV/ CONVOLUTION_MODE
+      REAL*8 STHPCH
       SAVE T,XNE,WING,F0,WIDTH,ALPHA,SPROF,NALPHA,
      *     NWL1,NTEMP1,NNE1,NLINE1,FIRST,LINDEX
       DATA FIRST/.TRUE./,LINDEX/10000*0/
@@ -669,7 +673,11 @@ C  Interpolate over alpha. For each IT and IN we consider 3 cases:
 C  1. alpha is in the first interval - simple linear interpolation
 C     (.LE.: at alpha = ALPHA(2) the log branch would use ALPHA(1) = 0)
 C  2. alpha is outside the table     - extrapolate using wing parameter
-C  3. alpha is in between            - log interpolation
+C  3. alpha is in between            - log interpolation: linear in 
+C     (log alpha, log S) with HLINOP_SET_CONVOLUTION(0); by default a 
+C     monotone cubic (STHPCH), because the linear form lies below the 
+C     profile in Doppler-dominated cores (half widths 1-6 per cent too 
+C     small, areas 0.96-0.99 instead of 1)
 C  Only the corners with non-zero density weight are evaluated.
 C
       S11=0.
@@ -698,6 +706,8 @@ C
         S11=DAL2*LOG10(SPROF(K-1,IT,IN,LINE))+
      +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
         S11=EXP10(S11)
+        IF (CONVOLUTION_MODE.EQ.1) S11=STHPCH(DBLE(ALP),K,
+     *     NALPHA(IT,IN,LINE),ALPHA(1,IT,IN,LINE),SPROF(1,IT,IN,LINE))
       END IF
       S11=LOG10(S11/F0A)
       END IF
@@ -728,6 +738,8 @@ C
         S21=DAL2*LOG10(SPROF(K-1,IT,IN,LINE))+
      +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
         S21=EXP10(S21)
+        IF (CONVOLUTION_MODE.EQ.1) S21=STHPCH(DBLE(ALP),K,
+     *     NALPHA(IT,IN,LINE),ALPHA(1,IT,IN,LINE),SPROF(1,IT,IN,LINE))
       END IF
       S21=LOG10(S21/F0A)
       END IF
@@ -758,6 +770,8 @@ C
         S12=DAL2*LOG10(SPROF(K-1,IT,IN,LINE))+
      +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
         S12=EXP10(S12)
+        IF (CONVOLUTION_MODE.EQ.1) S12=STHPCH(DBLE(ALP),K,
+     *     NALPHA(IT,IN,LINE),ALPHA(1,IT,IN,LINE),SPROF(1,IT,IN,LINE))
       END IF
       S12=LOG10(S12/F0B)
       END IF
@@ -788,6 +802,8 @@ C
         S22=DAL2*LOG10(SPROF(K-1,IT,IN,LINE))+
      +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
         S22=EXP10(S22)
+        IF (CONVOLUTION_MODE.EQ.1) S22=STHPCH(DBLE(ALP),K,
+     *     NALPHA(IT,IN,LINE),ALPHA(1,IT,IN,LINE),SPROF(1,IT,IN,LINE))
       END IF
       S22=LOG10(S22/F0B)
       END IF
@@ -813,6 +829,91 @@ C
       STOP
       END
 
+      REAL*8 FUNCTION STHPCH(XL,K,NA,AA,SS)
+C
+C  Monotone cubic Hermite interpolation (Fritsch & Carlson 1980; the 
+C  PCHIP form) of log10 S against log10 alpha at XL = log10 alpha, in 
+C  the interval of nodes K-1 and K (K-1 >= 2: node 1 is alpha = 0).  
+C  AA, SS: the NA tabulated alpha and S of one profile.  Passes through
+C  the nodes and keeps the profile monotonic between them.  Returns S.
+C
+      IMPLICIT NONE
+      INTEGER K,NA
+      REAL*8 XL
+      REAL AA(*),SS(*)
+      REAL*8 X0,X1,Y0,Y1,H,T,D0,D1,STHPD
+      X0 = LOG10(DBLE(AA(K-1)))
+      X1 = LOG10(DBLE(AA(K)))
+      Y0 = LOG10(DBLE(SS(K-1)))
+      Y1 = LOG10(DBLE(SS(K)))
+      H = X1 - X0
+      T = (XL - X0)/H
+      D0 = STHPD(K-1,NA,AA,SS)
+      D1 = STHPD(K,NA,AA,SS)
+      STHPCH = 10.D0**((2.D0*T**3-3.D0*T**2+1.D0)*Y0
+     *       + (T**3-2.D0*T**2+T)*H*D0 + (-2.D0*T**3+3.D0*T**2)*Y1
+     *       + (T**3-T**2)*H*D1)
+      RETURN
+      END
+
+C***********************************************************************
+      REAL*8 FUNCTION STHPD(J,NA,AA,SS)
+C
+C  Slope d(log10 S)/d(log10 alpha) at node J for STHPCH, from the nodes
+C  2..NA: weighted harmonic mean of the neighbouring secants inside, 
+C  zero at a local extremum, the three-point form at the ends (as in
+C  PCHIP).
+C
+      IMPLICIT NONE
+      INTEGER J,NA
+      REAL AA(*),SS(*)
+      REAL*8 HM,HP,DM,DP,W1,W2,D
+      IF (NA-1.LT.2) THEN
+        STHPD = 0.D0
+        RETURN
+      ENDIF
+      IF (NA-1.EQ.2) THEN
+        STHPD = (LOG10(DBLE(SS(3)))-LOG10(DBLE(SS(2))))/
+     *          (LOG10(DBLE(AA(3)))-LOG10(DBLE(AA(2))))
+        RETURN
+      ENDIF
+      IF ((J.GT.2).AND.(J.LT.NA)) THEN
+        HM = LOG10(DBLE(AA(J)))-LOG10(DBLE(AA(J-1)))
+        HP = LOG10(DBLE(AA(J+1)))-LOG10(DBLE(AA(J)))
+        DM = (LOG10(DBLE(SS(J)))-LOG10(DBLE(SS(J-1))))/HM
+        DP = (LOG10(DBLE(SS(J+1)))-LOG10(DBLE(SS(J))))/HP
+        IF (DM*DP.LE.0.D0) THEN
+          STHPD = 0.D0
+        ELSE
+          W1 = 2.D0*HP + HM
+          W2 = HP + 2.D0*HM
+          STHPD = (W1+W2)/(W1/DM + W2/DP)
+        ENDIF
+        RETURN
+      ENDIF
+C  end points: J = 2 (first node with alpha > 0) or J = NA
+      IF (J.LE.2) THEN
+        HM = LOG10(DBLE(AA(3)))-LOG10(DBLE(AA(2)))
+        HP = LOG10(DBLE(AA(4)))-LOG10(DBLE(AA(3)))
+        DM = (LOG10(DBLE(SS(3)))-LOG10(DBLE(SS(2))))/HM
+        DP = (LOG10(DBLE(SS(4)))-LOG10(DBLE(SS(3))))/HP
+      ELSE
+        HM = LOG10(DBLE(AA(NA)))-LOG10(DBLE(AA(NA-1)))
+        HP = LOG10(DBLE(AA(NA-1)))-LOG10(DBLE(AA(NA-2)))
+        DM = (LOG10(DBLE(SS(NA)))-LOG10(DBLE(SS(NA-1))))/HM
+        DP = (LOG10(DBLE(SS(NA-1)))-LOG10(DBLE(SS(NA-2))))/HP
+      ENDIF
+      D = ((2.D0*HM+HP)*DM - HM*DP)/(HM+HP)
+      IF (D*DM.LE.0.D0) THEN
+        D = 0.D0
+      ELSE IF ((DM*DP.LE.0.D0).AND.(ABS(D).GT.3.D0*ABS(DM))) THEN
+        D = 3.D0*DM
+      ENDIF
+      STHPD = D
+      RETURN
+      END
+
+C***********************************************************************
       SUBROUTINE HGRID(HFILE,WAVE,WAVE0,TEMP,NHYD,NLOW,NUP,HLIN)
 C
 C  N Piskunov's code to return Stehle Stark profiles
