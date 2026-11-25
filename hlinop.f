@@ -19,11 +19,12 @@ C  REAL FUNCTION HLCUT(WAVE,NBLO,NBUP,WAVEH)
 C  REAL FUNCTION HPROFL(N,M,WAVE,WAVEH,T,XNE,H1FRC,HE1FRC,DOPPH)
 C  REAL FUNCTION STARK1(N,M,WAVE,WAVEH,T,XNE)
 C  REAL FUNCTION STARK1C(N,M,WAVE,WAVEH,T,XNE)
+C  REAL FUNCTION HPCONV(N,M,WAVE,WAVEH,T,XNE,DOPPH,HWLOR,IFINS,...)
 C  REAL FUNCTION STARK1L(N,M,WAVE,WAVEH,T,XNE)
 C  SUBROUTINE STARK1PARTS(N,M,WAVE,WAVEH,T,XNE,PQ,PE,PF,GAMO,SB)
 C  SUBROUTINE HLFFT(A,NN,ISIGN)
-C  SUBROUTINE HLINOP_SET_STARK(MODE)
-C  BLOCK DATA HLSTRKD
+C  SUBROUTINE HLINOP_SET_CONVOLUTION(MODE)
+C  BLOCK DATA HLCONVD
 C  REAL FUNCTION HFNM(N,M)
 C  REAL FUNCTION VCSE1F(X)
 C  REAL FUNCTION SOFBET(B,P,N,M)
@@ -277,6 +278,10 @@ C
       DIMENSION ASUM(100),ASUMLYMAN(100),XKNMTB(4,3)
       DIMENSION SIGMA(3),ALF(3),BALFAC(3)
       REAL*8 LYMANH2PLUS(111),LYMANH2(91)
+      INTEGER CONVOLUTION_MODE
+      COMMON /HLCONV/ CONVOLUTION_MODE
+      EXTERNAL HLCONVD
+      REAL HPCONV
       REAL*8 CLIGHT
       LOGICAL LYMANALF
       SAVE
@@ -532,6 +537,16 @@ C
 C
       HWLOR = RESONT*H1FRC + VDW*T3NHE + RADAMP
 C
+C  Nov 2026: by default the mechanisms are convolved (HPCONV); the 
+C  approximate combination below is used for Lyman alpha and with 
+C  HLINOP_SET_CONVOLUTION(0).
+C
+      IF ((CONVOLUTION_MODE.EQ.1).AND.(.NOT.LYMANALF)) THEN
+        HPROFL = HPCONV(N,M,WAVE,WAVEH,T,XNE,DOPPH,HWLOR,IFINS,
+     *                  FINEST,FINSWT)
+        RETURN
+      ENDIF
+C
 C  *Approximate* convolution is achieved by two cases:
 C   (a) close to the core -> take the dominant mechanism.
 C   (b) outside the core -> add all mechanisms.
@@ -748,23 +763,196 @@ C
       END
 
 C***********************************************************************
+      REAL FUNCTION HPCONV(N,M,WAVE,WAVEH,T,XNE,DOPPH,HWLOR,IFINS,
+     *                     FINEST,FINSWT)
+C
+C  Line profile (per unit frequency, unit area) as the convolution
+C     Doppler (with fine structure) (*) Lorentz (*) Stark
+C  Doppler: Gaussians of 1/e half width DOPPH*nu0 at the fine-structure
+C  shifts FINEST (Hz) with weights FINSWT; Lorentz: half width 
+C  HWLOR*nu0 (resonance + van der Waals + natural, as in HPROFL); 
+C  Stark: STARK1.  The Doppler and Lorentz parts enter through their 
+C  analytic Fourier transforms, so they may be arbitrarily narrow; the 
+C  Stark profile is sampled on a uniform frequency grid and the product
+C  is transformed back by FFT.  Done once per (N, M, WAVEH, T, XNE, 
+C  DOPPH, HWLOR) and cached (NSLOT states) on a logarithmic grid for 
+C  |dnu| <= RC (40 widths, at most 0.15 nu0); beyond RC the Stark 
+C  profile and the classical Lorentz profile of HPROFL are added.
+C
+      IMPLICIT NONE
+      INTEGER N,M,IFINS
+      REAL*8 WAVE,WAVEH,FINEST(*),FINSWT(*)
+      REAL T,XNE,DOPPH,HWLOR
+      INTEGER NSLOT,NOUT,NMAXG,NFFT
+      PARAMETER (NSLOT=128, NOUT=240, NMAXG=8191, NFFT=32768)
+      REAL*8 CLIGHT,PI
+      PARAMETER (CLIGHT=2.9979258D18, PI=3.14159265358979D0)
+      INTEGER KN(NSLOT),KM(NSLOT),NEXT,IS,I,J,K,NG,NH,NF
+      REAL*8 KW(NSLOT),KT(NSLOT),KNE(NSLOT),KD(NSLOT),KL(NSLOT)
+      REAL*8 RCS(NSLOT),FNMS(NSLOT)
+      REAL*8 XO(NOUT,NSLOT),YB(NOUT,NSLOT),YR(NOUT,NSLOT),Y0(NSLOT)
+      REAL*8 CV(NMAXG)
+      COMPLEX*16 FA(NFFT),GH
+      REAL*8 FREQNM,FREQ,DEL,DOP,HHW,WS,W,WMIN,RC,G,H,X,AK,SW
+      REAL*8 PQ,PE,PF,GAM0,SB,R,WW,YL,YH,PHI,AD,HHWF,XSELF
+      REAL*8 SUMS,TAILS
+      REAL STARK1
+      SAVE
+      DATA KN/NSLOT*0/, KM/NSLOT*0/, NEXT/1/
+C
+      DO 10 IS = 1, NSLOT
+        IF ((KN(IS).EQ.N).AND.(KM(IS).EQ.M).AND.(KW(IS).EQ.WAVEH)
+     *      .AND.(KT(IS).EQ.DBLE(T)).AND.(KNE(IS).EQ.DBLE(XNE))
+     *      .AND.(KD(IS).EQ.DBLE(DOPPH)).AND.(KL(IS).EQ.DBLE(HWLOR)))
+     *      GOTO 50
+   10 CONTINUE
+C
+C  Build.  Widths (Hz): Stark from the Holtsmark and impact scales.
+C
+      IS = NEXT
+      NEXT = MOD(NEXT,NSLOT) + 1
+      FREQNM = CLIGHT/WAVEH
+      DOP = DBLE(DOPPH)*FREQNM
+      HHW = DBLE(HWLOR)*FREQNM
+      CALL STARK1PARTS(N,M,WAVEH,WAVEH,T,XNE,PQ,PE,PF,GAM0,SB)
+      WS = SB*CLIGHT/WAVEH**2
+      W = MAX(WS*MAX(1.D0,GAM0), DOP, HHW)
+      WMIN = MIN(WS*MIN(1.D0,MAX(GAM0,1.D-6)), MAX(DOP,1.D-30*W), 
+     *           MAX(HHW,1.D-30*W))
+      RC = MIN(40.D0*W, 0.15D0*FREQNM)
+      G = 2.D0*RC
+      H = WMIN/8.D0
+      NH = INT(G/H)
+      IF (2*NH+1.GT.NMAXG) THEN
+        NH = (NMAXG-1)/2
+        H = G/DBLE(NH)
+      ENDIF
+      NG = 2*NH + 1
+      NF = 1
+   15 NF = 2*NF
+      IF (NF.LT.4*NG) GOTO 15
+      IF (NF.GT.NFFT) STOP 'HPCONV: NFFT too small'
+      DO 20 I = 1, NF
+        FA(I) = (0.D0,0.D0)
+   20 CONTINUE
+C  Stark profile on the grid (dnu = (I-NH-1)*H)
+      DO 21 I = 1, NG
+        X = DBLE(I-NH-1)*H
+        FA(I) = DCMPLX(DBLE(STARK1(N,M,CLIGHT/(FREQNM+X),WAVEH,T,XNE)),
+     *                 0.D0)
+   21 CONTINUE
+C  discrete normalisation: the sampled Stark profile gets its area 
+C  inside the grid (1 minus the far wings, ~dnu**-2.5), also when it 
+C  is narrower than the grid step
+      SUMS = 0.D0
+      DO 26 I = 1, NG
+        SUMS = SUMS + DBLE(FA(I))
+   26 CONTINUE
+      SUMS = SUMS*H
+      TAILS = 2.D0/3.D0*(DBLE(FA(1))+DBLE(FA(NG)))*G
+      IF (SUMS.GT.0.D0) THEN
+        DO 27 I = 1, NG
+          FA(I) = FA(I)*MAX(1.D0-TAILS,0.D0)/SUMS
+   27   CONTINUE
+      ENDIF
+      CALL HLFFT(FA,NF,1)
+C  multiply by the transforms of the Doppler and Lorentz profiles
+      SW = 0.D0
+      DO 22 J = 1, IFINS
+        SW = SW + FINSWT(J)
+   22 CONTINUE
+      DO 25 I = 1, NF
+        K = I - 1
+        IF (K.GE.NF/2) K = K - NF
+        AK = DBLE(K)/(DBLE(NF)*H)
+        GH = (0.D0,0.D0)
+        DO 23 J = 1, IFINS
+          GH = GH + FINSWT(J)*EXP(DCMPLX(0.D0,-2.D0*PI*AK*FINEST(J)))
+   23   CONTINUE
+        GH = GH/SW*EXP(-(PI*DOP*AK)**2 - 2.D0*PI*HHW*ABS(AK))
+        FA(I) = FA(I)*GH
+   25 CONTINUE
+      CALL HLFFT(FA,NF,-1)
+      DO 30 I = 1, NG
+        CV(I) = MAX(DBLE(FA(I))/DBLE(NF), 0.D0)
+   30 CONTINUE
+C  store on a log grid of |dnu| from H to RC; YB: dnu > 0 (blue), 
+C  YR: dnu < 0 (red)
+      Y0(IS) = CV(NH+1)
+      DO 40 K = 1, NOUT
+        XO(K,IS) = H*(RC/H)**(DBLE(K-1)/DBLE(NOUT-1))
+        R = XO(K,IS)/H
+        I = INT(R)
+        WW = R - DBLE(I)
+        YB(K,IS) = LOG(MAX((1.D0-WW)*CV(NH+1+I)+WW*CV(NH+2+I),1.D-300))
+        YR(K,IS) = LOG(MAX((1.D0-WW)*CV(NH+1-I)+WW*CV(NH-I),1.D-300))
+   40 CONTINUE
+      KN(IS) = N
+      KM(IS) = M
+      KW(IS) = WAVEH
+      KT(IS) = DBLE(T)
+      KNE(IS) = DBLE(XNE)
+      KD(IS) = DBLE(DOPPH)
+      KL(IS) = DBLE(HWLOR)
+      RCS(IS) = RC
+      FNMS(IS) = FREQNM
+C
+C  Evaluate
+C
+   50 FREQ = CLIGHT/WAVE
+      DEL = FREQ - FNMS(IS)
+      AD = ABS(DEL)
+      IF (AD.LE.RCS(IS)) THEN
+        IF (AD.LT.XO(1,IS)) THEN
+          IF (DEL.GE.0.D0) THEN
+            YH = EXP(YB(1,IS))
+          ELSE
+            YH = EXP(YR(1,IS))
+          ENDIF
+          PHI = Y0(IS) + (YH-Y0(IS))*AD/XO(1,IS)
+        ELSE
+          R = 1.D0 + DBLE(NOUT-1)*LOG(AD/XO(1,IS))/
+     *        LOG(XO(NOUT,IS)/XO(1,IS))
+          K = MIN(INT(R),NOUT-1)
+          WW = (LOG(AD)-LOG(XO(K,IS)))/(LOG(XO(K+1,IS))-LOG(XO(K,IS)))
+          IF (DEL.GE.0.D0) THEN
+            YL = YB(K,IS)
+            YH = YB(K+1,IS)
+          ELSE
+            YL = YR(K,IS)
+            YH = YR(K+1,IS)
+          ENDIF
+          PHI = EXP((1.D0-WW)*YL + WW*YH)
+        ENDIF
+        HPCONV = PHI
+      ELSE
+C  far wings: Stark plus the classical Lorentz profile of HPROFL
+        HHWF = DBLE(HWLOR)*FNMS(IS)*(FREQ/FNMS(IS))**2
+        XSELF = 4.D0*FREQ*FREQ*HHWF/PI/
+     *          ((DEL*(FNMS(IS)+FREQ))**2 + 4.D0*FREQ*FREQ*HHWF**2)
+        HPCONV = STARK1(N,M,WAVE,WAVEH,T,XNE) + XSELF
+      ENDIF
+      RETURN
+      END
+
+C***********************************************************************
       FUNCTION STARK1(N,M,WAVE,WAVEH,T,XNE)
 C
 C  Stark broadened line profile, normalised to unity with frequency.
 C
-C  Nov 2026: by default (HLINOP_SET_STARK(1)) the ion quasistatic 
-C  profile is convolved with the electron profile (impact core plus
-C  quasistatic electron wing), STARK1C.  The earlier code added the
-C  parts (area 1.7-2.1); it is kept as STARK1L and used for Lyman
-C  alpha (to be revisited) and when HLINOP_SET_STARK(0) is set.
+C  Nov 2026: by default (HLINOP_SET_CONVOLUTION(1)) the ion 
+C  quasistatic profile is convolved with the electron profile (impact
+C  core plus quasistatic electron wing), STARK1C.  The earlier code 
+C  added the parts (area 1.7-2.1); it is kept as STARK1L and used for
+C  Lyman alpha (to be revisited) and with HLINOP_SET_CONVOLUTION(0).
 C
       INTEGER N,M
       REAL*8 WAVE,WAVEH
       REAL T,XNE,STARK1L,STARK1C
-      INTEGER STARK_MODE
-      COMMON /HLSTRK/ STARK_MODE
-      EXTERNAL HLSTRKD
-      IF ((STARK_MODE.EQ.0).OR.((N.EQ.1).AND.(M.EQ.2))) THEN
+      INTEGER CONVOLUTION_MODE
+      COMMON /HLCONV/ CONVOLUTION_MODE
+      EXTERNAL HLCONVD
+      IF ((CONVOLUTION_MODE.EQ.0).OR.((N.EQ.1).AND.(M.EQ.2))) THEN
         STARK1 = STARK1L(N,M,WAVE,WAVEH,T,XNE)
       ELSE
         STARK1 = STARK1C(N,M,WAVE,WAVEH,T,XNE)
@@ -973,29 +1161,35 @@ C
       END
 
 C***********************************************************************
-      SUBROUTINE HLINOP_SET_STARK(MODE)
+      SUBROUTINE HLINOP_SET_CONVOLUTION(MODE)
 C
-C  Stark profiles in HLINOP/HPROFL:
-C     MODE = 1  convolution of the quasistatic and impact parts (default)
-C     MODE = 0  the parts added, as before Nov 2026 (area 1.7-2.1)
-C  Lyman alpha always uses the earlier construction (for now).
+C  Combination of the broadening mechanisms in HLINOP/HPROFL:
+C     MODE = 1  convolutions (default): Stark = ion quasistatic 
+C               convolved with the electron profile (STARK1C); 
+C               profile = Doppler (with fine structure) convolved with
+C               the Lorentz (resonance, van der Waals, natural) and
+C               Stark profiles (HPCONV)
+C     MODE = 0  the earlier code (before Nov 2026): Stark parts added,
+C               and in HPROFL the dominant mechanism in the core with
+C               all mechanisms added outside it
+C  Lyman alpha always uses the earlier code (for now).
 C
       INTEGER MODE
-      INTEGER STARK_MODE
-      COMMON /HLSTRK/ STARK_MODE
-      EXTERNAL HLSTRKD
+      INTEGER CONVOLUTION_MODE
+      COMMON /HLCONV/ CONVOLUTION_MODE
+      EXTERNAL HLCONVD
       IF ((MODE.NE.0).AND.(MODE.NE.1))
-     *   STOP 'HLINOP_SET_STARK: MODE must be 0 or 1'
-      STARK_MODE = MODE
+     *   STOP 'HLINOP_SET_CONVOLUTION: MODE must be 0 or 1'
+      CONVOLUTION_MODE = MODE
       RETURN
       END
 
 C***********************************************************************
-      BLOCK DATA HLSTRKD
-C  Default: convolved Stark profiles.
-      INTEGER STARK_MODE
-      COMMON /HLSTRK/ STARK_MODE
-      DATA STARK_MODE /1/
+      BLOCK DATA HLCONVD
+C  Default: convolved profiles.
+      INTEGER CONVOLUTION_MODE
+      COMMON /HLCONV/ CONVOLUTION_MODE
+      DATA CONVOLUTION_MODE /1/
       END
 
 C***********************************************************************
@@ -1003,7 +1197,7 @@ C***********************************************************************
 C
 C  Legacy STARK1 (before Nov 2026), kept unchanged: the quasistatic and
 C  impact parts are ADDED, so the area is 1.7-2.1, not 1.  Used for 
-C  Lyman alpha and when HLINOP_SET_STARK(0) is set.
+C  Lyman alpha and when HLINOP_SET_CONVOLUTION(0) is set.
 C
 C  Returns the Stark broadened line profile.  The code follows Griem's 
 C  theories (mostly 1960 ApJ, 132, 883) with corrections to approximate 

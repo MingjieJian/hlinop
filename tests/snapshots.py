@@ -37,14 +37,14 @@ def compute():
     snap["wcalc"] = {"kind": "stable", "inputs": WCALC_CASES, "values": H.wcalc(WCALC_CASES).tolist()}
     snap["wcalc_hm88"] = {"kind": "stable", "excluded_volume_scale": 1.0, "inputs": WCALC_CASES,
                           "values": H.wcalc(WCALC_CASES, scale=1.0).tolist()}
-    # profile: default (convolved Stark profiles); profile_stark_legacy: HLINOP_SET_STARK(0)
-    for key, stark in (("profile", None), ("profile_stark_legacy", 0)):
+    # profile: default (convolved profiles); profile_legacy: HLINOP_SET_CONVOLUTION(0)
+    for key, convolution in (("profile", None), ("profile_legacy", 0)):
         prof = {}
         for nlo, nup, T, ne, nh, nhe in PROFILE_SETS:
             w0 = H.line_centre(nlo, nup)
-            p, q = H.profile(nlo, nup, T, ne, nh, nhe, H.doppler(T), w0 + np.array(PROFILE_OFFSETS), stark=stark)
+            p, q = H.profile(nlo, nup, T, ne, nh, nhe, H.doppler(T), w0 + np.array(PROFILE_OFFSETS), convolution=convolution)
             prof["%d-%d_T%g_ne%g" % (nlo, nup, T, ne)] = {"hprofl": p.tolist(), "hlinop": q.tolist()}
-        snap[key] = {"kind": "legacy", "stark_mode": stark, "offsets_A": PROFILE_OFFSETS, "values": prof}
+        snap[key] = {"kind": "legacy", "convolution_mode": convolution, "offsets_A": PROFILE_OFFSETS, "values": prof}
     hlp = {}
     for nlo, nup, T, ne, nh, nhe in HLINPROF_SETS:
         w0 = H.line_centre(nlo, nup)
@@ -57,15 +57,15 @@ def compute():
     # hbop: defaults (tabulated profiles, convolved Stark profiles for the other lines, no excluded
     # volume); hbop_hlinop_profiles: HLINOP for all lines; hbop_original: HLINOP for all lines with
     # the added Stark parts and the Hummer & Mihalas excluded volume, i.e. the code before Nov 2026
-    for key, scale, mode, stark in (("hbop", None, None, None), ("hbop_hlinop_profiles", None, 0, None),
+    for key, scale, mode, convolution in (("hbop", None, None, None), ("hbop_hlinop_profiles", None, 0, None),
                                     ("hbop_original", 1.0, 0, 0)):
         hb = {}
         for label, nh, nhe, ne, T in HBOP_CONDITIONS:
             tot, cont = H.hbop(nh, nhe, ne, T, H.doppler(T), lines, HBOP_WAVES, scale=scale, profile=mode,
-                               stark=stark)
+                               convolution=convolution)
             hb[label] = {"total": tot.tolist(), "contin": cont.tolist()}
         snap[key] = {"kind": "legacy", "excluded_volume_scale": scale, "line_profile_mode": mode,
-                     "stark_mode": stark, "waves_A": HBOP_WAVES,
+                     "convolution_mode": convolution, "waves_A": HBOP_WAVES,
                      "lines": "Balmer, Paschen, Brackett to n_up = 30, vacuum centres", "values": hb}
     return snap
 
