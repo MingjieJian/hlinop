@@ -10,3 +10,7 @@ SYNTH/hlincodes.tar_aug26_2003
 SYNTH/maketar
 
 SYNTH/hlincodes.tar
+
+__pycache__/
+
+.pytest_cache/

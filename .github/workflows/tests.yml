@@ -1,0 +1,47 @@
+name: tests
+
+# Linux: every pull request and every push to develop/master (fast, ~25 s).
+# macOS: only pushes to develop/master and manual runs; GitHub's macOS runners can queue
+# for a long time, so pull requests do not wait for them.
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install gfortran
+        run: sudo apt-get update && sudo apt-get install -y gfortran
+      - name: Install Python packages
+        run: python -m pip install -r tests/requirements.txt
+      - name: Run tests
+        run: python -m pytest tests -rxX
+
+  macos:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install gfortran
+        run: brew install gcc
+      - name: Install Python packages
+        run: python -m pip install -r tests/requirements.txt
+      - name: Run tests
+        run: python -m pytest tests -rxX
