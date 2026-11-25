@@ -155,6 +155,8 @@ C
       COMMON /HBOPEV/ EXCLUDED_VOLUME_SCALE
       INTEGER LINE_PROFILE_MODE
       COMMON /HBOPLP/ LINE_PROFILE_MODE
+      INTEGER CONVOLUTION_MODE
+      COMMON /HLCONV/ CONVOLUTION_MODE
       EXTERNAL HBOPEVD
       REAL PROF, HLCUT, WCUTF
       REAL*8 CAA
@@ -238,7 +240,8 @@ C  tabulated profiles (HLINOP, used for the other lines, has them)
      *                  DOP,PROF)
           PROF = PROF * WAVE * WAVE / CAA
           IF ((NLO(I).LE.3).AND.(NUP(I).LE.30).AND.
-     *        .NOT.((NLO(I).EQ.1).AND.(NUP(I).EQ.2))) PROF = PROF*WCUTF
+     *        .NOT.((NLO(I).EQ.1).AND.(NUP(I).EQ.2).AND.
+     *              (CONVOLUTION_MODE.EQ.0))) PROF = PROF*WCUTF
         ENDIF
       ELSE
         PROF = HLINOP(WAVE,NLO(I),NUP(I),WAVEH(I),T,NE,NH,NHE,DOP)

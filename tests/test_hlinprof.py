@@ -12,7 +12,9 @@ import pytest
 import hltest as H
 from cases import HLINPROF_CASES
 
-CDS = json.loads((Path(__file__).resolve().parent / "data" / "stehle_cds_subset.json").read_text())
+CDS_ALL = json.loads((Path(__file__).resolve().parent / "data" / "stehle_cds_subset.json").read_text())
+CDS = [e for e in CDS_ALL if (e["nlo"], e["nup"]) != (1, 2)]          # Lyman alpha: own tests
+LYA = [e for e in CDS_ALL if (e["nlo"], e["nup"]) == (1, 2)]
 C_A = H.C_ANGSTROM
 
 
@@ -102,18 +104,18 @@ def test_missing_low_temperatures_at_high_density():
     assert tail < 0.01 and abs(a + tail - 1.0) < 0.05
 
 
-@pytest.mark.parametrize("line,T,ne", [((1, 2), 6000.0, 1e14), ((4, 11), 6000.0, 1e14), ((2, 31), 6000.0, 1e12),
-                                       ((2, 10), 2000.0, 1e12)],
-                         ids=["Lyman-alpha", "Brackett", "n_up>30", "T below table"])
-def test_hlinop_is_used_where_there_is_no_table(line, T, ne):
-    """Lyman alpha (by choice), lines without tables, and temperatures outside the table go to
-    HLINOP: HLINPROF = HLINOP * c / lambda^2."""
+@pytest.mark.parametrize("line,T,ne,conv", [((1, 2), 6000.0, 1e14, 0), ((4, 11), 6000.0, 1e14, None),
+                                            ((2, 31), 6000.0, 1e12, None), ((2, 10), 2000.0, 1e12, None)],
+                         ids=["Lyman-alpha (mode 0)", "Brackett", "n_up>30", "T below table"])
+def test_hlinop_is_used_where_there_is_no_table(line, T, ne, conv):
+    """Lines without tables, temperatures outside the table, and Lyman alpha with
+    HLINOP_SET_CONVOLUTION(0) go to HLINOP: HLINPROF = HLINOP * c / lambda^2."""
     nlo, nup = line
     nh, nhe = 1e16, 1e15
     w0 = H.line_centre(nlo, nup)
     w = w0 + np.array([0.0, 0.5, 2.0, -2.0, 10.0])
-    got = H.hlinprof(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0)
-    _, q = H.profile(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0)
+    got = H.hlinprof(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0, convolution=conv)
+    _, q = H.profile(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0, convolution=conv)
     np.testing.assert_allclose(got, q * C_A / w ** 2, rtol=1e-5)
 
 
@@ -173,4 +175,49 @@ def test_hlinprof_is_monotonic_between_table_nodes(entry):
     x = np.geomspace(a[1] * f0, a[-1] * f0, 3000)
     p = H.hlinprof(nlo, nup, T, ne, 0.0, 0.0, H.doppler(T, vturb_kms=0.0), w0 + x, wave0=w0)
     assert np.all(np.diff(p) <= 1e-9 * p[:-1])
+
+
+LYA_W4 = 1e8 / (82259.105 - 4000.0)          # -4000 cm^-1: start of the Allard far red wing
+LYA_CASES = [(5000.0, 1e12, 1e16), (6000.0, 1e14, 1e17), (8000.0, 1e15, 1e17), (12000.0, 1e16, 1e17)]
+
+
+@pytest.mark.parametrize("entry", LYA, ids=["ne%.0e_T%g" % (e["ne"], e["T"]) for e in LYA])
+def test_lyman_alpha_core_follows_the_table(entry):
+    """Lyman alpha core (thermal Doppler only, no H or He perturbers): blue side within 1.5% of the
+    Stehle & Hutcheon profile plus the natural-damping Lorentzian (not in the table) out to 5 A
+    (2.5% where the Doppler core falls off, 4 decades below the peak: there the convolution with
+    the Lorentzian exceeds the simple sum by 2%), half width within 3% of the tabulated one.  (The Griem Stark profile of HLINOP is 1.7-6 times
+    too wide for Lyman alpha: its core is dominated by the unshifted Stark components.)"""
+    T, ne, f0 = entry["T"], entry["ne"], entry["f0"]
+    w0 = H.line_centre(1, 2)
+    a, sd = np.array(entry["alpha"]), np.array(entry["sdop"])
+    dl = a * f0
+    use = dl <= 5.0
+    gnat = 6.265e8 / 2.0 * w0 ** 2 / C_A / (2.0 * np.pi)          # natural half width (A)
+    ref = sd[use] / f0 + np.where(dl[use] > 0.05, gnat / np.pi / (gnat ** 2 + dl[use] ** 2), 0.0)
+    got = H.hlinprof(1, 2, T, ne, 0.0, 0.0, H.doppler(T, vturb_kms=0.0), w0 - dl[use], wave0=w0)
+    tol = np.where(ref > 1e-3 * ref[0], 0.015, 0.025)
+    assert np.all(np.abs(got / ref - 1.0) < tol), np.max(np.abs(got / ref - 1.0))
+    hw_ref = entry["hwhm_dop_alpha"] * f0
+    x = np.linspace(0.0, 4.0 * hw_ref, 8001)
+    p = H.hlinprof(1, 2, T, ne, 0.0, 0.0, H.doppler(T, vturb_kms=0.0), w0 - x, wave0=w0)
+    r = int(np.argmax(p < p[0] / 2))
+    hw = np.interp(p[0] / 2, [p[r], p[r - 1]], [x[r], x[r - 1]])
+    assert abs(hw / hw_ref - 1.0) < 0.03
+
+
+@pytest.mark.parametrize("case", LYA_CASES, ids=["T%d_ne%.0e" % c[:2] for c in LYA_CASES])
+def test_lyman_alpha_joins_the_allard_far_wing(case):
+    """The red core profile is joined continuously to the Allard far wing at -4000 cm^-1, and the
+    far wing (Allard H-H and H-H+ plus the electron share of the quasistatic wing) equals that of
+    the earlier code (HPROFL) from 1300 A to 3000 A within 1%."""
+    T, ne, nh = case
+    w0 = H.line_centre(1, 2)
+    dop = H.doppler(T, 1.0)
+    p = H.hlinprof(1, 2, T, ne, nh, nh / 10.0, dop, [LYA_W4 - 1e-4, LYA_W4 + 1e-4], wave0=w0)
+    assert abs(p[1] / p[0] - 1.0) < 1e-3
+    wf = [1300.0, 1400.0, 1600.0, 2000.0, 3000.0]
+    new = H.hlinprof(1, 2, T, ne, nh, nh / 10.0, dop, wf, wave0=w0)
+    old = H.hlinprof(1, 2, T, ne, nh, nh / 10.0, dop, wf, wave0=w0, convolution=0)
+    np.testing.assert_allclose(new, old, rtol=0.01)
 

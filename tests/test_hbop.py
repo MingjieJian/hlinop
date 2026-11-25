@@ -51,7 +51,7 @@ def _line_opacity(nlo, nup, waves, profile, cond=HBOP_CONDITIONS[0]):
     return tot - cont
 
 
-@pytest.mark.parametrize("line", [(2, 4), (2, 10), (2, 22), (3, 14), (1, 3)], ids=lambda l: "%d-%d" % l)
+@pytest.mark.parametrize("line", [(2, 4), (2, 10), (2, 22), (3, 14), (1, 3), (1, 2)], ids=lambda l: "%d-%d" % l)
 def test_hbop_uses_the_tabulated_profiles(line):
     """By default the line opacity of a tabulated line follows HLINPROF (per A, converted to per
     Hz); HBOP_SET_LINE_PROFILE(0) follows HLINOP.  Their ratio equals the profile ratio."""

@@ -27,6 +27,9 @@ HLINPROF_SETS = [(2, 3, 5800.0, 1e13, 1e17, 1e16), (2, 4, 6300.0, 1e14, 1e17, 1e
                  (2, 5, 10000.0, 1e15, 1e16, 1e15), (1, 3, 7000.0, 1e14, 1e16, 1e15),
                  (2, 22, 6300.0, 1e14, 1e17, 1e16), (3, 14, 5000.0, 1e13, 1e16, 1e15)]
 HLINPROF_OFFSETS = [0.0, 0.1, 0.5, 2.0, 8.0, 30.0, -0.5, -8.0]
+# Lyman alpha (table core, transition, Allard far red wing)
+LYA_SETS = [(1, 2, 7000.0, 1e14, 1e16, 1e15), (1, 2, 12000.0, 1e16, 1e17, 1e16)]
+LYA_OFFSETS = [0.0, 0.05, 0.5, 5.0, 30.0, 60.0, 200.0, 800.0, -0.5, -5.0, -30.0]
 HBOP_WAVES = [3640.0, 3655.0, 3670.0, 3700.0, 3750.0, 3800.0, 3889.0, 3970.0, 4102.0, 4300.0,
               4861.0, 6563.0, 8000.0, 8600.0, 16000.0]
 
@@ -51,6 +54,12 @@ def compute():
         hlp["%d-%d_T%g_ne%g" % (nlo, nup, T, ne)] = H.hlinprof(
             nlo, nup, T, ne, nh, nhe, H.doppler(T), w0 + np.array(HLINPROF_OFFSETS)).tolist()
     snap["hlinprof"] = {"kind": "stable", "offsets_A": HLINPROF_OFFSETS, "values": hlp}
+    lya = {}
+    for nlo, nup, T, ne, nh, nhe in LYA_SETS:
+        w0 = H.line_centre(nlo, nup)
+        lya["%d-%d_T%g_ne%g" % (nlo, nup, T, ne)] = H.hlinprof(
+            nlo, nup, T, ne, nh, nhe, H.doppler(T), w0 + np.array(LYA_OFFSETS)).tolist()
+    snap["hlinprof_lyman_alpha"] = {"kind": "stable", "offsets_A": LYA_OFFSETS, "values": lya}
     lines = [(2, m, H.line_centre(2, m)) for m in range(3, 31)] + \
             [(3, m, H.line_centre(3, m)) for m in range(4, 31)] + \
             [(4, m, H.line_centre(4, m)) for m in range(5, 31)]

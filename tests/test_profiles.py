@@ -92,7 +92,8 @@ def test_stark1_matches_lemke_vcs_for_brackett(ref):
 
 
 def test_lyman_alpha_keeps_the_earlier_stark_profile():
-    """Lyman alpha uses the earlier construction in both modes (to be revisited)."""
+    """STARK1 keeps the earlier construction for Lyman alpha in both modes (the tabulated profile
+    is in HLINPROF)."""
     w0 = H.line_centre(1, 2)
     w = w0 + np.array([0.0, 0.1, 1.0, 10.0, -1.0, -10.0])
     a = H.profile(1, 2, 8000.0, 1e15, 1e17, 1e16, H.doppler(8000.0), w, stark1=True)
@@ -167,7 +168,8 @@ def test_hprofl_stark_limit():
 
 
 def test_lyman_alpha_keeps_the_earlier_profile():
-    """Lyman alpha (HPROFL and STARK1) is the same in both modes (to be revisited)."""
+    """HPROFL and STARK1 keep the earlier Lyman alpha in both modes (the tabulated profile is in
+    HLINPROF)."""
     w0 = H.line_centre(1, 2)
     w = w0 + np.array([0.0, 0.1, 1.0, 10.0, -1.0, -10.0, -100.0])
     a, _ = H.profile(1, 2, 8000.0, 1e15, 1e17, 1e16, H.doppler(8000.0), w)

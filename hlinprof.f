@@ -3,6 +3,7 @@ C   Table of contents:
 C
 C     SUBROUTINE HLINPROF(WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,
 C    *                   H1FRC,HE1FRC,DOP,PROF)
+C     REAL*8 FUNCTION HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,...)
 C     REAL*8 FUNCTION HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,...)
 C     SUBROUTINE STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
 C     REAL*8 FUNCTION STHPCH(XL,K,NA,AA,SS), STHPD(J,NA,AA,SS)
@@ -75,7 +76,7 @@ C
       REAL*8 DEL1,DDEL,XNEXP,F1,HLIND
       REAL*8 STARKD
       REAL*8 LOR,HWID,RES
-      REAL*8 GAML,AEXT,DOPTH,HLPCONV
+      REAL*8 GAML,AEXT,DOPTH,HLPCONV,HLYAPRF
       INTEGER CONVOLUTION_MODE
       COMMON /HLCONV/ CONVOLUTION_MODE
       EXTERNAL HLCONVD
@@ -101,11 +102,15 @@ C We check we have a line which we can handle
 C  if not then pass to HLINOP
 C
 C  Lines in the Stehle & Hutcheon (1999) table: Lyman, Balmer and 
-C  Paschen to n_up = 30.  Lyman alpha is left to HLINOP, which treats 
-C  its far wings (H2 and H2+ quasi-molecular satellites) separately.
+C  Paschen to n_up = 30.  Lyman alpha uses the table for its core and
+C  the Allard et al. quasi-molecular profiles for its far red wing 
+C  (HLYAPRF) with the default settings; otherwise it is left to HLINOP,
+C  which has the earlier treatment.
 C
       IF ((NLOW .GT. 3) .OR. (NUP .GT. 30) .OR. 
-     ;    ((NLOW .EQ. 1) .AND. (NUP .EQ. 2))) THEN
+     ;    ((NLOW .EQ. 1) .AND. (NUP .EQ. 2) .AND. 
+     ;     .NOT.((CONVOLUTION_MODE.EQ.1).AND.(ICONV.EQ.1).AND.
+     ;           (ISTARK.EQ.1).AND.(ISELF.NE.1)))) THEN
         IF (FIRST) THEN
           FIRST = .FALSE.
           PRINT*,' Using Hlinop code!'
@@ -166,6 +171,11 @@ C  Doppler broadening beyond the thermal width of H in the tables
         DOPTH = SQRT(2.D0*1.380649D-16*TEMP/1.6735575D-24)/2.99792458D10
         AEXT = 0.D0
         IF (DOP.GT.DOPTH) AEXT = WAVE0*SQRT(DBLE(DOP)**2-DOPTH**2)
+        IF ((NLOW.EQ.1).AND.(NUP.EQ.2)) THEN
+          PROF = HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,AEXT,
+     ;                   DBLE(RAD)*WAVE0*WAVE0/C/2./PI)
+          RETURN
+        ENDIF
         PROF = HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,AEXT,GAML)
         RETURN
       ENDIF
@@ -316,6 +326,75 @@ C
       PROF = HLIN
       RETURN
 C
+      END
+
+      REAL*8 FUNCTION HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,
+     *                        AEXT,GNAT)
+C
+C  Lyman alpha profile (per A):
+C  - core: the Stehle & Hutcheon table convolved with the extra Doppler
+C    width AEXT and the Lorentz profile of the natural (GNAT, A), 
+C    resonance (H-H, Ali & Griem) and van der Waals (He) widths, as in 
+C    HPROFL (HLPCONV).  Redward of 1240 A the natural width is left out
+C    (RAYLCUT in HPROFL: the far red natural wing is Rayleigh 
+C    scattering, treated elsewhere), as a second cached state;
+C  - red side: times the Boltzmann factor exp(-hc dsigma/kT) for the
+C    absorption wing (Stehle 1994, A&AS 104, 509, eqn 7), as STARK1;
+C  - red wing beyond -4000 cm^-1 (1278 A): the Allard et al. H-H and 
+C    H-H+ quasi-molecular profiles (HLYAFW) plus half the tabulated 
+C    quasistatic wing (times the Boltzmann factor) for the electrons:
+C    the H-H+ profiles are for protons only, the tabulated far wing 
+C    counts ions and electrons; 0 redward of 5000 A, as in HPROFL;
+C  - in between, the red core profile times a factor going linearly 
+C    from 1 at the line centre to the value that joins the far wing at
+C    -4000 cm^-1 (as HPROFL joins its impact and Holtsmark parts there).
+C
+      IMPLICIT NONE
+      CHARACTER HFILE*(*)
+      REAL*8 WAVE,WAVE0,AEXT,GNAT
+      REAL TEMP,XXNE,H1FRC,HE1FRC
+      REAL*8 CA,RAYLCUT,HCK
+      PARAMETER (CA=2.997925D18, RAYLCUT=1240.D0, HCK=1.438777D0)
+      REAL*8 GNM,RESONT,VDW,T3NHE,GS,D,SIG0,W4,D4,C4,F4,CORE,BZ
+      REAL*8 BZ4,HLPCONV,HLYAFW
+      REAL HFNM,PV
+C  resonance (Ali & Griem) and van der Waals widths of Lyman alpha as 
+C  in HPROFL (dnu/nu), converted to A
+      GNM = 0.75D0
+      RESONT = DBLE(HFNM(1,2))/(1.D0-0.25D0)*2.07D-24/GNM
+      VDW = 4.45D-26/GNM*(4.D0*(7.D0*4.D0+5.D0))**0.4D0
+      T3NHE = (DBLE(TEMP)/1.D4)**0.3D0*DBLE(HE1FRC)
+      GS = (RESONT*DBLE(H1FRC) + VDW*T3NHE)*WAVE0
+      D = WAVE - WAVE0
+      IF (D.LE.0.D0) THEN
+        HLYAPRF = HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,1,2,AEXT,GS+GNAT)
+        RETURN
+      ENDIF
+      IF (WAVE.GE.5000.D0) THEN
+        HLYAPRF = 0.D0
+        RETURN
+      ENDIF
+      SIG0 = 1.D8/WAVE0
+      BZ = EXP(-HCK*(SIG0-1.D8/WAVE)/DBLE(TEMP))
+C  -4000 cm^-1 from 82259.105 cm^-1, the anchor of the Allard tables
+      W4 = 1.D8/(82259.105D0-4000.D0)
+      D4 = W4 - WAVE0
+      IF (WAVE.LT.W4) THEN
+        IF (WAVE.LT.RAYLCUT) THEN
+          CORE = HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,1,2,AEXT,GS+GNAT)
+        ELSE
+          CORE = HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,1,2,AEXT,GS)
+        ENDIF
+        BZ4 = EXP(-HCK*4000.D0/DBLE(TEMP))
+        C4 = HLPCONV(HFILE,W4,WAVE0,TEMP,XXNE,1,2,AEXT,GS)*BZ4
+        CALL STEHLE(HFILE,W4,WAVE0,TEMP,XXNE,1,2,PV)
+        F4 = HLYAFW(W4,XXNE,H1FRC)*CA/W4**2 + 0.5D0*DBLE(PV)*BZ4
+        HLYAPRF = CORE*BZ*(1.D0 + (F4/C4-1.D0)*D/D4)
+      ELSE
+        CALL STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,1,2,PV)
+        HLYAPRF = HLYAFW(WAVE,XXNE,H1FRC)*CA/WAVE**2 + 0.5D0*DBLE(PV)*BZ
+      ENDIF
+      RETURN
       END
 
       REAL*8 FUNCTION HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,
