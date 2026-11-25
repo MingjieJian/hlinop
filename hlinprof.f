@@ -5,10 +5,10 @@ C     SUBROUTINE HLINPROF(WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,
 C    *                   H1FRC,HE1FRC,DOP,PROF)
 C     SUBROUTINE STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
 C     SUBROUTINE HGRID(HFILE,WAVE,WAVE0,TEMP,NHYD,NLOW,NUP,HLIN)
-C     SUBROUTINE HSELF_PDWIDTH(LINE,TEMP,H1FRC,WIDTH)
-C     SUBROUTINE HE_PDWIDTH(LINE,TEMP,HE1FRC,HEWID)
-C     SUBROUTINE RAD_WIDTH(LINE,WIDTH)
-C     SUBROUTINE ALI_GRIEM(LINE,WAVE0,H1FRC,WIDTH)
+C     SUBROUTINE HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,WIDTH)
+C     SUBROUTINE HE_PDWIDTH(NLOW,NUP,TEMP,HE1FRC,HEWID)
+C     SUBROUTINE RAD_WIDTH(NLOW,NUP,WIDTH)
+C     SUBROUTINE ALI_GRIEM(NLOW,NUP,WAVE0,H1FRC,WIDTH)
 C     SUBROUTINE VCS(PR,XNE,T,DEL,II,N,M)                                      
 C
 C
@@ -74,7 +74,7 @@ C
       REAL*8 STARKD
       REAL*8 LOR,HWID,RES
       REAL*8 C,PI
-      CHARACTER*80 HFILE,HVCSFILE,HSELFFILE
+      CHARACTER*256 HFILE,HVCSFILE,HSELFFILE
       LOGICAL FIRST
 C
       SAVE FIRST 
@@ -94,7 +94,12 @@ C
 C We check we have a line which we can handle
 C  if not then pass to HLINOP
 C
-      IF ((NLOW .NE. 2) .OR. (NUP .GT. 5)) THEN
+C  Lines in the Stehle & Hutcheon (1999) table: Lyman, Balmer and 
+C  Paschen to n_up = 30.  Lyman alpha is left to HLINOP, which treats 
+C  its far wings (H2 and H2+ quasi-molecular satellites) separately.
+C
+      IF ((NLOW .GT. 3) .OR. (NUP .GT. 30) .OR. 
+     ;    ((NLOW .EQ. 1) .AND. (NUP .EQ. 2))) THEN
         IF (FIRST) THEN
           FIRST = .FALSE.
           PRINT*,' Using Hlinop code!'
@@ -124,15 +129,24 @@ C
         IF (ISTARK .EQ. 1) THEN
           CALL STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
 C
-C If outside table range use VCS
+C If outside the table (temperature, or density below the table) use
+C HLINOP, which includes all broadening mechanisms itself
 C
           IF (HLIN.LT.0.) THEN
-            CALL VCS(HLIND,XNED,TD,DEL,1,NLOW,NUP,HVCSFILE)
-            HLIN = HLIND
+            PROF = HLINOP(WAVE,NLOW,NUP,WAVE0,TEMP,XXNE,H1FRC,
+     ;                                          HE1FRC,DOP)
+            PROF = PROF * C/WAVE/WAVE
+            RETURN
           ENDIF
         END IF
         IF (ISTARK .EQ. 2) THEN
           CALL VCS(HLIND,XNED,TD,DEL,1,NLOW,NUP,HVCSFILE)
+          IF (HLIND.LT.0.) THEN
+            PROF = HLINOP(WAVE,NLOW,NUP,WAVE0,TEMP,XXNE,H1FRC,
+     ;                                          HE1FRC,DOP)
+            PROF = PROF * C/WAVE/WAVE
+            RETURN
+          ENDIF
           HLIN = HLIND
         END IF
         IF ((DEL .GT. .2d0) .AND. (H1FRC .GT. 0.)) THEN
@@ -143,18 +157,18 @@ C
 C If outside table range use p-d approx
 C
             IF (HHLIN.LT.0.) THEN
-              CALL HSELF_PDWIDTH(LINE,TEMP,H1FRC,HWID)
+              CALL HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,HWID)
               HWID = HWID * WAVE0 * WAVE0 / C / 2. / PI
               HHLIN = HWID / (HWID * HWID + DEL * DEL) / PI
             ENDIF
           ENDIF
           IF (ISELF .EQ. 2) THEN
-            CALL HSELF_PDWIDTH(LINE,TEMP,H1FRC,HWID)
+            CALL HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,HWID)
             HWID = HWID * WAVE0 * WAVE0 / C / 2. / PI
             HHLIN = HWID / (HWID * HWID + DEL * DEL) / PI
           END IF
           IF (ISELF .EQ. 3) THEN
-            CALL ALI_GRIEM(LINE,WAVE0,H1FRC,RES)
+            CALL ALI_GRIEM(NLOW,NUP,WAVE0,H1FRC,RES)
             HHLIN = RES / (RES * RES + DEL * DEL) / PI
           END IF 
           HLIN = HLIN + HHLIN
@@ -201,13 +215,13 @@ C
             IF (ISELF .EQ. 1) CALL HGRID(HSELFFILE,
      ;              WV2,WAVE0,TD,H1FRCD,NLOW,NUP,HHLIN)
             IF (ISELF .EQ. 2) THEN
-              CALL HSELF_PDWIDTH(LINE,TEMP,H1FRC,HWID)
+              CALL HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,HWID)
               HWID = HWID * WAVE0 * WAVE0 / C / 2. / PI
               HHLIN = HWID / (HWID * HWID + WLKRN(IKRN) * WLKRN(IKRN)) 
      ,                     / PI
             END IF
             IF (ISELF .EQ. 3) THEN
-              CALL ALI_GRIEM(LINE,WAVE0,H1FRC,RES)
+              CALL ALI_GRIEM(NLOW,NUP,WAVE0,H1FRC,RES)
               HHLIN = RES / (RES * RES + WLKRN(IKRN) * WLKRN(IKRN)) / PI
             END IF 
           KERN(IKRN) = HHLIN
@@ -239,8 +253,8 @@ C The He and radiative broadening are always assumed small enough to
 C convolve by adding 
 C
       HEWID = 0.
-      IF (IHE .EQ. 1 ) CALL HE_PDWIDTH(LINE,TEMP,HE1FRC,HEWID)
-      CALL RAD_WIDTH(LINE,RAD)
+      IF (IHE .EQ. 1 ) CALL HE_PDWIDTH(NLOW,NUP,TEMP,HE1FRC,HEWID)
+      CALL RAD_WIDTH(NLOW,NUP,RAD)
 C
 C  Compute the width in lambda units (AA)
 C
@@ -259,8 +273,25 @@ C
 C
 C  N Piskunov's code to return Stehle Stark profiles
 C
+C  Nov 2026: reads the table built by tools/make_stehle_table.py from 
+C  the CDS catalogue J/A+AS/140/93 (format version 2: Lyman, Balmer 
+C  and Paschen to n_up = 30, 10 temperatures, log n_e 10 - 19.5).  
+C  NALPHA = 0 marks profiles that are not tabulated (above a line's 
+C  Inglis-Teller limit, and the lowest temperatures at high density).
+C  Electron densities:
+C    - inside the tabulated range: interpolation as before;
+C    - above the last tabulated density of the line (at both bracketing
+C      temperatures): the profile of that density is used in alpha 
+C      units, with the normal Holtsmark field F0 scaled to the actual 
+C      density as n_e**(2/3), i.e. quasistatic scaling of the width; 
+C      the profile stays normalised;
+C    - below the first density (1e10): the first profile is used in
+C      wavelength units (Doppler-dominated cores).
+C  Outside the temperature range HLIN = -1 is returned (caller falls 
+C  back to HLINOP).
+C
       DOUBLE PRECISION WAVE,WAVE0
-      PARAMETER (NWL=50,NTEMP=10,NNE=15,NLINE=6,SQRTPI=1.77245385)
+      PARAMETER (NWL=60,NTEMP=10,NNE=20,NLINE=90,SQRTPI=1.77245385)
       REAL T(NTEMP),XNE(NNE)
       REAL WING(NNE,NLINE),F0(NNE,NLINE),WIDTH(NTEMP,NNE,NLINE),
      *     ALPHA(NWL,NTEMP,NNE,NLINE),SPROF(NWL,NTEMP,NNE,NLINE)
@@ -290,7 +321,8 @@ C
 C
 C  Read table dimensions and process errors
 C
-        READ(1,ERR=9,END=10) NWL1,NTEMP1,NNE1,NLINE1
+        READ(1,ERR=11,END=11) NWL1,NTEMP1,NNE1,NLINE1,IVERS
+        IF(IVERS.NE.2) GO TO 11
         IF(NWL1.GT.NWL) THEN
           WRITE(*,*) 'ERROR: NWL must be at least',NWL1,
      *               ' to hold the Hydrogen line table in STEHLE'
@@ -342,6 +374,19 @@ C
    2    READ(1,ERR=9,END=10) (((SPROF(K,I,J,L),K=1,NWL1),
      *                       I=1,NTEMP1),J=1,NNE1)
         CLOSE(1)
+C  Guard against trailing padding (alpha = 0 or zero intensity) in a
+C  profile; the table built from CDS has none, older tables did.
+        DO 23 L=1,NLINE1
+        DO 23 J=1,NNE1
+        DO 23 I=1,NTEMP1
+        DO 22 K=1,NALPHA(I,J,L)
+        IF(SPROF(K,I,J,L).LE.0..OR.
+     *     (K.GT.1.AND.ALPHA(K,I,J,L).LE.ALPHA(K-1,I,J,L))) THEN
+          NALPHA(I,J,L)=K-1
+          GO TO 23
+        END IF
+   22   CONTINUE
+   23   CONTINUE
         IF(LINDEX(NLOW,NUP).GT.0) WRITE(*,*) 
      *    'Will use Stehle''s tables for Hydrogen line profiles'
       END IF
@@ -372,31 +417,61 @@ C
       DT1=(LOG10(TEMP)-LOG10(T(ITEMP-1)))/DT
       DT2=(LOG10(T(ITEMP))-LOG10(TEMP))/DT
 C
-C   Electron density interpolation (no extrapolation)
-C
-      ANE=LOG10(XXNE)
-      IF(ANE.LT.XNE(1).OR.ANE.GT.XNE(NNE1)) THEN
+C  Electron density.  JMAX = number of leading densities tabulated at
+C  both bracketing temperatures.
+      JMAX=0
+   21 IF(JMAX.LT.NNE1) THEN
+        IF(NALPHA(ITEMP-1,JMAX+1,LINE).GT.0.AND.
+     *     NALPHA(ITEMP,JMAX+1,LINE).GT.0) THEN
+          JMAX=JMAX+1
+          GO TO 21
+        END IF
+      END IF
+      IF(JMAX.EQ.0) THEN
         HLIN=-1.
         RETURN
       END IF
-      INE=2
-   4  IF(XNE(INE).LT.ANE.AND.INE.LT.NNE1) THEN
-        INE=INE+1
-        GO TO 4
+      ANE=LOG10(XXNE)
+      IF(ANE.LE.XNE(1).OR.JMAX.EQ.1) THEN
+C  Below the table (or only one density): first profile, in A
+        INE=2
+        DNE1=0.
+        DNE2=1.
+        F0A=F0(1,LINE)
+        F0B=F0A
+        IF(ANE.GT.XNE(1)) F0A=F0(1,LINE)*EXP10((ANE-XNE(1))/1.5)
+      ELSE IF(ANE.GE.XNE(JMAX)) THEN
+C  Above the line's last tabulated density: quasistatic scaling
+        INE=JMAX
+        DNE1=1.
+        DNE2=0.
+        F0B=F0(JMAX,LINE)*EXP10((ANE-XNE(JMAX))/1.5)
+        F0A=F0B
+      ELSE
+        INE=2
+    4   IF(XNE(INE).LT.ANE.AND.INE.LT.JMAX) THEN
+          INE=INE+1
+          GO TO 4
+        END IF
+        DNE=XNE(INE)-XNE(INE-1)
+        DNE1=(ANE-XNE(INE-1))/DNE
+        DNE2=(XNE(INE)-ANE)/DNE
+        F0A=F0(INE-1,LINE)
+        F0B=F0(INE,LINE)
       END IF
-      DNE=XNE(INE)-XNE(INE-1)
-      DNE1=(ANE-XNE(INE-1))/DNE
-      DNE2=(XNE(INE)-ANE)/DNE
-C
 C  Interpolate over alpha. For each IT and IN we consider 3 cases:
 C  1. alpha is in the first interval - simple linear interpolation
+C     (.LE.: at alpha = ALPHA(2) the log branch would use ALPHA(1) = 0)
 C  2. alpha is outside the table     - extrapolate using wing parameter
 C  3. alpha is in between            - log interpolation
+C  Only the corners with non-zero density weight are evaluated.
 C
+      S11=0.
+      IF(DNE2.GT.0.) THEN
       IT=ITEMP-1
       IN=INE-1
-      ALP=ABS(WAVE-WAVE0)/F0(IN,LINE)
-      IF(ALP.LT.ALPHA(2,IT,IN,LINE)) THEN
+      ALP=ABS(WAVE-WAVE0)/F0A
+      IF(ALP.LE.ALPHA(2,IT,IN,LINE)) THEN
         DAL=ALPHA(2,IT,IN,LINE)-ALPHA(1,IT,IN,LINE)
         DAL1=(ALP-ALPHA(1,IT,IN,LINE))/DAL
         DAL2=(ALPHA(2,IT,IN,LINE)-ALP)/DAL
@@ -406,7 +481,7 @@ C
       ELSE
         ALP=LOG10(ALP)
         K=2
-   5    IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
+   5  IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
      *     K.LT.NALPHA(IT,IN,LINE)) THEN
           K=K+1
           GO TO 5
@@ -418,12 +493,15 @@ C
      +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
         S11=EXP10(S11)
       END IF
-      S11=LOG10(S11/F0(IN,LINE))
+      S11=LOG10(S11/F0A)
+      END IF
 C
+      S21=0.
+      IF(DNE2.GT.0.) THEN
       IT=ITEMP
       IN=INE-1
-      ALP=ABS(WAVE-WAVE0)/F0(IN,LINE)
-      IF(ALP.LT.ALPHA(2,IT,IN,LINE)) THEN
+      ALP=ABS(WAVE-WAVE0)/F0A
+      IF(ALP.LE.ALPHA(2,IT,IN,LINE)) THEN
         DAL=ALPHA(2,IT,IN,LINE)-ALPHA(1,IT,IN,LINE)
         DAL1=(ALP-ALPHA(1,IT,IN,LINE))/DAL
         DAL2=(ALPHA(2,IT,IN,LINE)-ALP)/DAL
@@ -433,7 +511,7 @@ C
       ELSE
         ALP=LOG10(ALP)
         K=2
-   6    IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
+   6  IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
      *     K.LT.NALPHA(IT,IN,LINE)) THEN
           K=K+1
           GO TO 6
@@ -445,12 +523,15 @@ C
      +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
         S21=EXP10(S21)
       END IF
-      S21=LOG10(S21/F0(IN,LINE))
+      S21=LOG10(S21/F0A)
+      END IF
 C
+      S12=0.
+      IF(DNE1.GT.0.) THEN
       IT=ITEMP-1
       IN=INE
-      ALP=ABS(WAVE-WAVE0)/F0(IN,LINE)
-      IF(ALP.LT.ALPHA(2,IT,IN,LINE)) THEN
+      ALP=ABS(WAVE-WAVE0)/F0B
+      IF(ALP.LE.ALPHA(2,IT,IN,LINE)) THEN
         DAL=ALPHA(2,IT,IN,LINE)-ALPHA(1,IT,IN,LINE)
         DAL1=(ALP-ALPHA(1,IT,IN,LINE))/DAL
         DAL2=(ALPHA(2,IT,IN,LINE)-ALP)/DAL
@@ -460,7 +541,7 @@ C
       ELSE
         ALP=LOG10(ALP)
         K=2
-   7    IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
+   7  IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
      *     K.LT.NALPHA(IT,IN,LINE)) THEN
           K=K+1
           GO TO 7
@@ -472,12 +553,15 @@ C
      +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
         S12=EXP10(S12)
       END IF
-      S12=LOG10(S12/F0(IN,LINE))
+      S12=LOG10(S12/F0B)
+      END IF
 C
+      S22=0.
+      IF(DNE1.GT.0.) THEN
       IT=ITEMP
       IN=INE
-      ALP=ABS(WAVE-WAVE0)/F0(IN,LINE)
-      IF(ALP.LT.ALPHA(2,IT,IN,LINE)) THEN
+      ALP=ABS(WAVE-WAVE0)/F0B
+      IF(ALP.LE.ALPHA(2,IT,IN,LINE)) THEN
         DAL=ALPHA(2,IT,IN,LINE)-ALPHA(1,IT,IN,LINE)
         DAL1=(ALP-ALPHA(1,IT,IN,LINE))/DAL
         DAL2=(ALPHA(2,IT,IN,LINE)-ALP)/DAL
@@ -487,7 +571,7 @@ C
       ELSE
         ALP=LOG10(ALP)
         K=2
-   8    IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
+   8  IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
      *     K.LT.NALPHA(IT,IN,LINE)) THEN
           K=K+1
           GO TO 8
@@ -499,10 +583,9 @@ C
      +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
         S22=EXP10(S22)
       END IF
-      S22=LOG10(S22/F0(IN,LINE))
-C
+      S22=LOG10(S22/F0B)
+      END IF
 C  Interpolate over T and Ne
-C
       HLIN=EXP10(DT2*DNE2*S11+DT1*DNE2*S21+DT2*DNE1*S12+DT1*DNE1*S22)
       RETURN
 C
@@ -516,6 +599,11 @@ C
       IF(I.LE.0) I=LEN(HFILE)
       WRITE(*,*) 'EOF found while reading binary file '//HFILE(1:I)//
      *           ' in HTABLE'
+      STOP
+  11  I=INDEX(HFILE,' ')-1
+      IF(I.LE.0) I=LEN(HFILE)
+      WRITE(*,*) 'ERROR: '//HFILE(1:I)//' is not a version-2 Stehle '//
+     *           'table; build it with tools/make_stehle_table.py'
       STOP
       END
 
@@ -940,27 +1028,31 @@ C
       END
 
 
-      SUBROUTINE HSELF_PDWIDTH(LINE,TEMP,H1FRC,WIDTH)
+      SUBROUTINE HSELF_PDWIDTH(NLOW,NUPP,TEMP,H1FRC,WIDTH)
 C
 C   Computes the Lorentzian WIDTH self broadening 
 C   of the Hydrogen Balmer Lines in the p-d approximation
 C   Output in usual rad /s cm^3
 C   
-C   Here LINE = 1,2,3... for Halpha, Hbeta, Hgamma ...
-C
       IMPLICIT NONE
       REAL*4 H1FRC
       REAL*4 C,PI,KB,M0,A0,SIGMAH(4),ALPHAH(4),
      *       X,GAMMAF,GX,VBAR,SIGMA,TEMP
       REAL*8 GVW, WIDTH
-      INTEGER LINE
+      INTEGER LINE,NLOW,NUPP
 C
       PARAMETER (C=2.997925E+18,PI=3.14159265)
       PARAMETER (KB=1.380658E-23,M0=1.660540E-27)
       PARAMETER (A0=5.29177249E-11)  
       DATA SIGMAH/ 1180., 2320., 4208., 0.0/
       DATA ALPHAH/ 0.677, 0.455, 0.380, 0.0/
-C  
+C
+      IF ((NLOW.NE.2) .OR. (NUPP.GT.5)) THEN
+         WIDTH = 0.d0
+         RETURN
+      ENDIF  
+C
+      LINE = NUPP - NLOW
       X = 2. - ALPHAH(LINE) * .5
       GX = X - 1.0
       GAMMAF = 1+(-.5748646+(.9512363+(-.6998588+(.4245549-.1010678*GX
@@ -976,7 +1068,7 @@ C
 C
       END
 
-      SUBROUTINE HE_PDWIDTH(LINE,TEMP,HE1FRC,HEWID)
+      SUBROUTINE HE_PDWIDTH(NLOW,NUPP,TEMP,HE1FRC,HEWID)
 C 
 C  Compute approximate broadening by He collisions (p-d approx)
 C
@@ -988,12 +1080,18 @@ C
       REAL*4 PI,C,HE1FRC,GAMMAF
       REAL*4 SIGMAH(4),ALPHAH(4),X,GX,A0,SIGMA,VBAR,KB,M0,TEMP
       REAL*4 HEWID,GVW
-      INTEGER LINE
+      INTEGER NLOW,NUPP,LINE
       PARAMETER (C=2.997925E+18,PI=3.14159265,A0=5.29177249E-11)    
       PARAMETER (KB=1.380658E-23,M0=1.660540E-27)
       DATA SIGMAH/ 834., 1998., 3837., 5700. /
       DATA ALPHAH/ .280, .330, .260, .250 /
 C
+      IF ((NLOW.NE.2) .OR. (NUPP.GT.6)) THEN
+         HEWID = 0.d0
+         RETURN
+      ENDIF  
+C
+      LINE = NUPP - NLOW
       X = 2. - ALPHAH(LINE) * .5
       GX = X - 1.0
       GAMMAF = 1+(-.5748646+(.9512363+(-.6998588+(.4245549-.1010678*GX
@@ -1008,23 +1106,74 @@ C
       RETURN
       END
 
-      SUBROUTINE RAD_WIDTH(LINE,WIDTH)
+      SUBROUTINE RAD_WIDTH(NLOW,NUPP,WIDTH)
 C
 C  Returns the radiation damping width (hwhm) in rad/s cm^3
 C
-C  27/4/00 PB
+C  12/6/2013 PB based on Kurucz and Peterson
 C
-      INTEGER LINE
-      REAL*4 WIDTH,GAMRAD(4)
-      DATA GAMRAD/ 5.698, 5.001, 4.815, 4.740 / 
+      INTEGER NLOW,NUPP,LINE
+      REAL*4 WIDTH,GAMMA,GL,GU,ASUM(100),ASUMLYMAN(100)
 C
-      WIDTH = GAMRAD(LINE) * 1.e8 / 2.
+C  Einstein A-value sums for H lines
+C
+      DATA ASUM/
+     1 0.000E+00, 4.696E+08, 9.980E+07, 3.017E+07, 1.155E+07, 5.189E+06,
+     2 2.616E+06, 1.437E+06, 8.444E+05, 5.234E+05, 3.389E+05, 2.275E+05,
+     3 1.575E+05, 1.120E+05, 8.142E+04, 6.040E+04, 4.560E+04, 3.496E+04,
+     4 2.719E+04, 2.141E+04, 1.711E+04, 1.377E+04, 1.119E+04, 9.166E+03,
+     5 7.572E+03, 6.341E+03, 5.338E+03, 4.523E+03, 3.854E+03, 3.302E+03,
+     6 2.844E+03, 2.460E+03, 2.138E+03, 1.866E+03, 1.635E+03, 1.438E+03,
+     7 1.269E+03, 1.124E+03, 9.983E+02, 8.894E+02, 7.947E+02, 7.120E+02,
+     8 6.396E+02, 5.759E+02, 5.198E+02, 4.703E+02, 4.263E+02, 3.873E+02,
+     9 3.526E+02, 3.215E+02, 2.938E+02, 2.689E+02, 2.465E+02, 2.264E+02,
+     A 2.082E+02, 1.918E+02, 1.769E+02, 1.634E+02, 1.512E+02, 1.400E+02,
+     1 1.298E+02, 1.206E+02, 1.121E+02, 1.043E+02, 9.720E+01, 9.066E+01,
+     2 8.465E+01, 7.912E+01, 7.403E+01, 6.933E+01, 6.498E+01, 6.097E+01,
+     3 5.725E+01, 5.381E+01, 5.061E+01, 4.765E+01, 4.489E+01, 4.232E+01,
+     4 3.994E+01, 3.771E+01, 3.563E+01, 3.369E+01, 3.188E+01, 3.019E+01,
+     5 2.860E+01, 2.712E+01, 2.572E+01, 2.442E+01, 2.319E+01, 2.204E+01,
+     6 2.096E+01, 1.994E+01, 1.898E+01, 1.808E+01, 1.722E+01, 1.642E+01,
+     7 1.566E+01, 1.495E+01, 1.427E+01, 1.363E+01/
+C
+C  For Lyman lines only the s-p transition is allowed.
+C
+      DATA ASUMLYMAN/
+     1 0.000E+00, 6.265E+08, 1.897E+08, 8.126E+07, 4.203E+07, 2.450E+07,
+     2 1.236E+07, 8.249E+06, 5.782E+06, 4.208E+06, 3.158E+06, 2.430E+06,
+     3 1.910E+06, 1.567E+06, 1.274E+06, 1.050E+06, 8.752E+05, 7.373E+05,
+     4 6.269E+05, 5.375E+05, 4.643E+05, 4.038E+05, 3.534E+05, 3.111E+05,
+     5 2.752E+05, 2.447E+05, 2.185E+05, 1.959E+05, 1.763E+05, 1.593E+05,
+     6 1.443E+05, 1.312E+05, 1.197E+05, 1.094E+05, 1.003E+05, 9.216E+04,
+     7 8.489E+04, 7.836E+04, 7.249E+04, 6.719E+04, 6.239E+04, 5.804E+04,
+     8 5.408E+04, 5.048E+04, 4.719E+04, 4.418E+04, 4.142E+04, 3.888E+04,
+     9 3.655E+04, 3.440E+04, 3.242E+04, 3.058E+04, 2.888E+04, 2.731E+04,
+     A 2.585E+04, 2.449E+04, 2.322E+04, 2.204E+04, 2.094E+04, 1.991E+04,
+     1 1.894E+04, 1.804E+04, 1.720E+04, 1.640E+04, 1.566E+04, 1.496E+04,
+     2 1.430E+04, 1.368E+04, 1.309E+04, 1.254E+04, 1.201E+04, 1.152E+04,
+     3 1.105E+04, 1.061E+04, 1.019E+04, 9.796E+03, 9.419E+03, 9.061E+03,
+     4 8.721E+03, 8.398E+03, 8.091E+03, 7.799E+03, 7.520E+03, 7.255E+03,
+     5 7.002E+03, 6.760E+03, 6.530E+03, 6.310E+03, 6.100E+03, 5.898E+03,
+     6 5.706E+03, 5.522E+03, 5.346E+03, 5.177E+03, 5.015E+03, 4.860E+03,
+     7 4.711E+03, 4.569E+03, 4.432E+03, 4.300E+03/
+C
+       GAMMA = 0.
+       GL = 0.
+       GU = 0.
+       IF (NLOW.EQ.1) THEN
+         IF (NUPP.LE.100) GAMMA = ASUMLYMAN(NUPP)
+       ELSE
+         IF (NLOW.LE.100) GL = ASUM(NLOW)
+         IF (NUPP.LE.100) GU = ASUM(NUPP)
+         GAMMA = GL + GU
+       ENDIF
+       WIDTH = GAMMA / 2. 
 C
       RETURN
       END
 
 
-      SUBROUTINE ALI_GRIEM(LINE,WAVE0,H1FRC,WIDTH)
+      SUBROUTINE ALI_GRIEM(NLOW,NUPP,WAVE0,H1FRC,WIDTH)
 C
 C   Computes the Resonance Width (AA) of the Hydrogen Balmer Lines
 C   Halfwidth given H1FRC perturbers per cm^3 
@@ -1039,7 +1188,12 @@ C
       IMPLICIT NONE
       REAL*4 H1FRC
       REAL*8 WAVE0,WIDTH,FW
-      INTEGER LINE
+      INTEGER NLOW,NUPP,LINE
+C      
+      IF (NLOW.NE.2)  THEN
+         WIDTH = 0.d0
+         RETURN
+      ENDIF  
 C
 C     WAVE0 in AA, WIDTH in AA  
 C
@@ -1071,7 +1225,7 @@ C     ASSUMES RAW PROFILES ARE IN ALPHA UNITS.
 C     DIMENSION ALPHA(40),PRALPH(40)                                  
       DIMENSION PRALPH(40)                                   
       DIMENSION SVCS(6,17,40,4),ALPHA0(4)  
-      CHARACTER*80 HVCSFILE                                
+      CHARACTER*(*) HVCSFILE                                
       DATA SVCS(1,1,1,1)/0./,ALPHA0/-3.,-3.,-3.,-3./   
       SAVE SVCS
 C
@@ -1089,6 +1243,11 @@ C     READ IN VCS ARRAYS
       CLOSE(1)
 C
     3 LINE=M-N                                  
+C     ONLY THE FIRST FOUR BALMER LINES ARE TABULATED
+      IF ((N.NE.2).OR.(LINE.GT.4)) THEN
+        PR(1)=-1.
+        RETURN
+      END IF
 C     TEMPERATURE AND ELECTRON DENSITY INTERPOLATION        
       AT=LOG10(T)                                                              
       BTEMP=(AT-3.3979411)/.3010300+1.                     

@@ -27,14 +27,14 @@ def profile_cases():
             yield nlo, nup, T, ne, nh, nhe
 
 
-# HLINPROF (Stehle tables in this repository cover H alpha - H gamma)
-HLINPROF_CASES = [(2, nup, T, ne, nh) for nup in (3, 4, 5)
-                  for T, ne, nh in ((5000.0, 1e12, 1e16), (6300.0, 1e14, 1e17), (10000.0, 1e15, 1e16))]
-
-# HLINPROF outside its Stehle grid (T 2500-10000 K, log n_e 10-16): falls back to VCS
-# (vcsbalmer.dat).  (T, n_e, n_HI)
-HLINPROF_VCS_CONDITIONS = [(12000.0, 1e15, 1e16), (20000.0, 1e16, 1e15), (12000.0, 1e17, 1e16),
-                           (5000.0, 1e17, 1e17), (5000.0, 1e9, 1e15)]
+# HLINPROF (Stehle & Hutcheon tables: Lyman beta and up, Balmer, Paschen to n_up = 30).
+# (n_lo, n_up, T, n_e, n_HI); conditions where +-10% of the line wavelength holds the profile.
+_TAB_LINES = [(1, 3), (1, 10), (2, 3), (2, 4), (2, 10), (2, 22), (2, 30), (3, 4), (3, 10), (3, 14), (3, 25)]
+HLINPROF_CASES = [(nlo, nup, T, ne, nh) for nlo, nup in _TAB_LINES
+                  for T, ne, nh in ((5000.0, 1e9, 1e15), (5000.0, 1e12, 1e16), (6300.0, 1e14, 1e17))]
+HLINPROF_CASES += [(nlo, nup, T, ne, nh) for nlo, nup in ((1, 3), (2, 3), (2, 4), (3, 4))
+                   for T, ne, nh in ((10000.0, 1e16, 1e16), (12000.0, 1e17, 1e16))]
+HLINPROF_CASES += [(1, 10, 10000.0, 1e16, 1e16), (2, 10, 10000.0, 1e16, 1e16)]
 
 # HBOP: (label, NH, NHE, NE, T)
 HBOP_CONDITIONS = [("FGK dwarf", 1e17, 1e16, 1e14, 6300.0),

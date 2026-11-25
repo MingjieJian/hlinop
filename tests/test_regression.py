@@ -31,6 +31,6 @@ def test_stable_snapshot(name):
 
 
 @pytest.mark.legacy
-@pytest.mark.parametrize("name", ["profile", "hbop", "hbop_hm88"])
+@pytest.mark.parametrize("name", ["profile", "hbop", "hbop_hlinop_profiles", "hbop_original"])
 def test_legacy_snapshot(name):
     _check(name)
