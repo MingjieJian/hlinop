@@ -380,14 +380,18 @@ C
       REAL H, C, HC, HBF
       REAL*8 WAVE, W(*), WAVEV, REDCUT, D, WSTAR, TAPER
       REAL*8 EHYD(NLEVELS), WCALC, HBNSTAR, AIRVAC
+      INTEGER MEDIUM_AIR
+      COMMON /HLMED/ MEDIUM_AIR
+      EXTERNAL HLCONVD
       PARAMETER (H=6.62607E-27, C=2.9979E10)
       PARAMETER (HC=H*C)
       CALL HBOPEN(EHYD)
       CONTIN = 0.
 C  The continuum is computed in vacuum wavelengths; WAVE is in air 
-C  above 2000 A (as for the lines, see HLINOP)
+C  above 2000 A (as for the lines, see HLINOP), or in vacuum with
+C  HLINOP_SET_MEDIUM(0)
       WAVEV = WAVE
-      IF (WAVE.GT.2000.D0) WAVEV = AIRVAC(WAVE)
+      IF ((WAVE.GT.2000.D0).AND.(MEDIUM_AIR.EQ.1)) WAVEV = AIRVAC(WAVE)
       IF ((NBFMAX.LT.1).OR.(NBFMAX.GT.NBF))
      *  STOP 'HBOP_BF_DISSOLVED: NBFMAX must be 1-15'
       DO 40 I = 1, NBFMAX
