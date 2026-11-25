@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import make_stehle_table as M  # noqa: E402
 
 # (series dir, n_lo, n_up, density file index, temperature) - table nodes
-NODES = [("ly", 1, 3, 9, 10000.0), ("ly", 1, 10, 5, 5000.0),
+NODES = [("ly", 1, 2, 9, 10000.0), ("ly", 1, 2, 13, 10000.0), ("ly", 1, 3, 9, 10000.0), ("ly", 1, 10, 5, 5000.0),
          ("ba", 2, 4, 9, 5000.0), ("ba", 2, 10, 7, 10000.0), ("ba", 2, 22, 5, 5000.0),
          ("ba", 2, 30, 3, 10000.0), ("ba", 2, 5, 15, 19950.0),
          ("pa", 3, 10, 9, 5000.0), ("pa", 3, 14, 7, 10000.0), ("pa", 3, 25, 4, 5000.0)]

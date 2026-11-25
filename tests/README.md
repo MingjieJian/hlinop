@@ -25,7 +25,7 @@ GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux fo
    - `HBOP` recomputes its cached populations when the excluded-volume setting changes;
    - `w` → 1 without perturbers, and `w` falls with n;
    - the continuum is smooth across the Balmer limit;
-   - `STARK1` has unit area and matches the Stark-only profiles of Stehlé & Hutcheon (`data/stehle_cds_subset.json`) and of Lemke's VCS tables for Brackett (`data/lemke_vcs_brackett.json`, from `make_vcs_subset.py`); Lyman alpha keeps the earlier profile;
+   - `STARK1` has unit area and matches the Stark-only profiles of Stehlé & Hutcheon (`data/stehle_cds_subset.json`) and of Lemke's VCS tables for Brackett (`data/lemke_vcs_brackett.json`, from `make_vcs_subset.py`); Lyman alpha keeps the earlier profile in HLINOP (HLINPROF has the tabulated one);
    - `HLINOP` equals `HPROFL` × `HLCUT` (the cutoff weight that HBOP applies to tabulated profiles);
    - `HLINPROF` returns the CDS profiles at table nodes (`data/stehle_cds_subset.json`, from `make_cds_subset.py`), has unit area within the tables' own normalisation, scales quasistatically above a line's last density, and returns HLINOP where there is no table;
    - `HBOP` uses the tabulated profiles by default and cuts them at the series limit.
@@ -50,6 +50,7 @@ None at present.
 
 ### Fixed (Nov 2026)
 
+- **Lyman alpha was left to HLINOP.** The Griem-type Stark profile is 1.7-13 times too wide for the Lyman alpha core (no unshifted components) and the earlier HLINOP profile has half widths 0.1-0.9 of the Stehlé & Hutcheon ones and peaks up to 9 times too high at n_e = 1e15-1e18 cm⁻³. HLINPROF now takes the core from the table (convolved with the natural, resonance and He widths), multiplies the red side by the Boltzmann factor, and joins it linearly at -4000 cm⁻¹ to the Allard et al. H–H and H–H⁺ far wing (as in HLINOP) plus half the tabulated quasistatic wing for the electrons. Tests: blue side against the CDS profiles plus the natural Lorentzian (1.5%), half width (3%), continuity at -4000 cm⁻¹, far wing equal to HLINOP at 1300–3000 Å (1%).
 - **`STEHLE` interpolation narrowed Doppler-dominated cores and lost area.** It interpolated linearly in log S against log α between nodes 0.2 dex apart. The chord lies below the profile in Doppler-dominated cores, so half widths were 1–6% narrower than the CDS header widths and areas came out at 0.96–0.99. This, not the published tables, was the cause of the earlier "tables not normalised" note. It now uses a monotone cubic (Fritsch–Carlson/PCHIP) in the same variables: areas are 0.98–1.00 and half widths are within 3% of the header widths. The tests also check monotonicity between nodes. `HLINOP_SET_CONVOLUTION(0)` keeps the linear form. The self-broadening grids (`HGRID`, `ISELF = 1`, not the default) still interpolate linearly.
 - **`HLINPROF` added the Lorentz broadening and ignored microturbulence.** The self-broadening Lorentzian was added beyond 0.2 Å (up to 4% extra area), and the Doppler width passed in was not used for tabulated lines. Both are now convolved with the tabulated profile (`HLPCONV`). The tests check that the area does not change with n_HI, that a Doppler width at or below the thermal one adds nothing, and that a large one sets the core width.
 - **Cached convolutions.** They are now stored on 1200 instead of 240 logarithmic points (up to 2% interpolation error in steep shoulders), and the grid size no longer overflows for extremely narrow components (segmentation fault for Ly10 at 1e16 cm⁻³).
@@ -64,5 +65,4 @@ None at present.
 
 3. **`STARK1` cache key.** The old `STARK1` caches `C1CON`/`C2CON`, which depend on `WAVEH`, keyed on (N, M) only, so a call with the same (N, M) and a different line centre reuses stale values. It is still so in `STARK1L`, kept unchanged. `STARK1PARTS`, used by the convolved profile, keys on (N, M, `WAVEH`).
 4. **Undefined variable in `STARK1L`.** The old `STARK1`, now `STARK1L`, computes `T3NHE` from `HE1FRC`, which is not one of its arguments; the value is never used. It is removed in `STARK1PARTS`.
-7. **Lyman alpha** is left to HLINOP on purpose (its far-wing satellites); to be revisited.
 8. **`hlinprof.f` does not compile on its own.** It needs a `DATA.FILES` include that only `SYNTH/Makefile` generates. The tests generate it themselves.

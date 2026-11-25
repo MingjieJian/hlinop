@@ -20,6 +20,7 @@ C  REAL FUNCTION HPROFL(N,M,WAVE,WAVEH,T,XNE,H1FRC,HE1FRC,DOPPH)
 C  REAL FUNCTION STARK1(N,M,WAVE,WAVEH,T,XNE)
 C  REAL FUNCTION STARK1C(N,M,WAVE,WAVEH,T,XNE)
 C  REAL FUNCTION HPCONV(N,M,WAVE,WAVEH,T,XNE,DOPPH,HWLOR,IFINS,...)
+C  REAL*8 FUNCTION HLYAFW(WAVE,XNE,H1FRC)
 C  REAL FUNCTION STARK1L(N,M,WAVE,WAVEH,T,XNE)
 C  SUBROUTINE STARK1PARTS(N,M,WAVE,WAVEH,T,XNE,PQ,PE,PF,GAMO,SB)
 C  SUBROUTINE HLFFT(A,NN,ISIGN)
@@ -759,6 +760,95 @@ C
 C
       HPROFL = HTOTAL
 C
+      RETURN
+      END
+
+C***********************************************************************
+      REAL*8 FUNCTION HLYAFW(WAVE, XNE, H1FRC)
+C
+C  Far red wing of Lyman alpha, per unit frequency, from the quasi-
+C  molecular profiles of Allard et al. (1998, A&A 335, 1124) as 
+C  implemented by Kurucz (ATLAS12; Castelli & Kurucz 2001, A&A 372, 
+C  260): H-H (tables LYMANH2, scaled with N(H I) = H1FRC) plus H-H+
+C  (tables LYMANH2PLUS, scaled with N(H+) = XNE).  Both assumed 
+C  independent of temperature.  The tables and their interpolation are
+C  those of HPROFL.  Defined redward of -4000 cm^-1 (1278 A) and 
+C  blueward of 20000 cm^-1 (5000 A); 0 elsewhere.  Used by HLINPROF.
+C
+      IMPLICIT NONE
+      REAL*8 WAVE
+      REAL XNE, H1FRC
+      REAL*8 LYMANH2PLUS(111),LYMANH2(91)
+      REAL*8 CLIGHTCM, FREQ, SPACING, F0, GRIDFREQ, X
+      INTEGER ICUT
+      PARAMETER (CLIGHTCM = 2.99792458D10)
+      DATA LYMANH2PLUS/
+     1 -15.14, -15.06, -14.97, -14.88, -14.80, -14.71, -14.62, -14.53,
+     2 -14.44, -14.36, -14.27, -14.18, -14.09, -14.01, -13.92, -13.83,
+     3 -13.74, -13.65, -13.57, -13.48, -13.39, -13.30, -13.21, -13.13,
+     4 -13.04, -12.95, -12.86, -12.77, -12.69, -12.60, -12.51, -12.40,
+     5 -12.29, -12.15, -12.02, -11.90, -11.76, -11.63, -11.53, -11.41,
+     6 -11.30, -11.22, -11.15, -11.09, -11.07, -11.06, -11.07, -11.09,
+     7 -11.12, -11.16, -11.19, -11.21, -11.24, -11.27, -11.30, -11.33,
+     8 -11.36, -11.39, -11.42, -11.45, -11.48, -11.48, -11.48, -11.48,
+     9 -11.48, -11.48, -11.48, -11.48, -11.48, -11.48, -11.48, -11.48,
+     A -11.48, -11.48, -11.48, -11.48, -11.41, -11.40, -11.39, -11.38,
+     1 -11.37, -11.36, -11.35, -11.34, -11.33, -11.32, -11.30, -11.29,
+     2 -11.28, -11.27, -11.27, -11.27, -11.26, -11.25, -11.24, -11.23,
+     3 -11.22, -11.21, -11.20, -11.19, -11.18, -11.17, -11.15, -11.14,
+     4 -11.13, -11.12, -11.11, -11.10, -11.09, -11.08, -11.07/
+C
+C     LYMAN ALPHA QUASI H2 PROFILE
+C     DELTA WAVENO = -22000+200*(N-1)  N=1,91  -4000
+C
+      DATA LYMANH2/
+     1 -13.43, -13.32, -13.21, -13.10, -12.98, -12.86, -12.79, -12.72,
+     2 -12.65, -12.58, -12.51, -12.47, -12.45, -12.45, -12.48, -12.51,
+     3 -12.53, -12.56, -12.59, -12.62, -12.65, -12.69, -12.73, -12.77,
+     4 -12.81, -12.85, -12.87, -12.89, -12.90, -12.90, -12.90, -12.90,
+     5 -12.90, -12.90, -12.90, -12.90, -12.90, -12.90, -12.90, -12.90,
+     6 -12.90, -12.90, -12.90, -12.90, -12.90, -12.90, -12.90, -12.90,
+     7 -12.90, -12.90, -12.90, -12.90, -12.90, -12.90, -12.90, -12.90,
+     8 -12.90, -12.90, -12.90, -12.90, -12.90, -12.90, -12.90, -12.90,
+     9 -12.90, -12.90, -12.90, -12.90, -12.90, -12.90, -12.89, -12.88,
+     A -12.87, -12.86, -12.85, -12.84, -12.83, -12.81, -12.80, -12.79,
+     1 -12.78, -12.76, -12.74, -12.72, -12.70, -12.68, -12.65, -12.62,
+     2 -12.59, -12.56, -12.53/
+
+      HLYAFW = 0.D0
+C  (one speed of light for the frequency and the thresholds; HPROFL 
+C  mixes 2.9979258e18 A/s and 2.99792458e10 cm/s, which moves the 
+C  -4000 cm^-1 boundary by 0.005 cm^-1)
+      FREQ = CLIGHTCM*1.D8/WAVE
+      IF (FREQ.GT.(82259.105D0-4000.D0+1.D-6)*CLIGHTCM) RETURN
+      IF (FREQ.LE.20000.D0*CLIGHTCM) RETURN
+C  H-H: grid -22000 ... -4000 cm^-1, 200 cm^-1 steps; extrapolated
+C  redward of -22000 cm^-1
+      SPACING = 200.D0*CLIGHTCM
+      F0 = (82259.105D0-22000.D0)*CLIGHTCM
+      IF (FREQ.LT.F0) THEN
+        X = (LYMANH2(2)-LYMANH2(1))/SPACING*(FREQ-F0)+LYMANH2(1)
+      ELSE
+        ICUT = MIN(INT((FREQ-F0)/SPACING), 89)
+        GRIDFREQ = ICUT*SPACING+F0
+        X = (LYMANH2(ICUT+2)-LYMANH2(ICUT+1))/SPACING*(FREQ-GRIDFREQ)
+     *      + LYMANH2(ICUT+1)
+      ENDIF
+      HLYAFW = (10.D0**(X-14.D0))*DBLE(H1FRC)/CLIGHTCM
+C  H-H+: grid -15000 ... -4000 cm^-1, 100 cm^-1 steps; extrapolated
+C  redward of -15000 cm^-1
+      SPACING = 100.D0*CLIGHTCM
+      F0 = (82259.105D0-15000.D0)*CLIGHTCM
+      IF (FREQ.LT.F0) THEN
+        X = (LYMANH2PLUS(2)-LYMANH2PLUS(1))/SPACING*(FREQ-F0)
+     *      + LYMANH2PLUS(1)
+      ELSE
+        ICUT = MIN(INT((FREQ-F0)/SPACING), 109)
+        GRIDFREQ = ICUT*SPACING+F0
+        X = (LYMANH2PLUS(ICUT+2)-LYMANH2PLUS(ICUT+1))/SPACING*
+     *      (FREQ-GRIDFREQ) + LYMANH2PLUS(ICUT+1)
+      ENDIF
+      HLYAFW = HLYAFW + (10.D0**(X-14.D0))*DBLE(XNE)/CLIGHTCM
       RETURN
       END
 
