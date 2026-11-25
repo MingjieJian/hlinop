@@ -6,6 +6,7 @@ C    *                   H1FRC,HE1FRC,DOP,PROF)
 C     REAL*8 FUNCTION HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,...)
 C     REAL*8 FUNCTION HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,...)
 C     SUBROUTINE STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
+C     SUBROUTINE STEHL2(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN,HLINM,IBOTH)
 C     REAL*8 FUNCTION STHPCH(XL,K,NA,AA,SS), STHPD(J,NA,AA,SS)
 C     SUBROUTINE HGRID(HFILE,WAVE,WAVE0,TEMP,NHYD,NLOW,NUP,HLIN)
 C     SUBROUTINE HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,WIDTH)
@@ -406,40 +407,49 @@ C  Gaussian and Lorentzian enter through their analytic Fourier
 C  transforms; the tabulated profile is sampled on a uniform grid and
 C  scaled to its own area within the grid (log-grid quadrature; the 
 C  tables are not renormalised to 1).  Done once per (NLOW, NUP, WAVE0,
-C  TEMP, XXNE, AEXT, GAML) and cached (NSLOT states) on a logarithmic
-C  grid for |dlambda| <= RC (40 widths, at most 0.15 WAVE0); beyond RC 
-C  the tabulated profile and the Lorentzian are added.
+C  TEMP, XXNE, AEXT, GAML) and cached on a logarithmic grid for 
+C  |dlambda| <= RC (40 widths, at most 0.15 WAVE0); beyond RC the 
+C  tabulated profile and the Lorentzian are added.  The cache holds up
+C  to NENT = 3/4 NSLOT states (hash index HLCKEY, stored densely), 
+C  enough for every line and depth of a model atmosphere; it is 
+C  emptied when full.
 C
       IMPLICIT NONE
       CHARACTER HFILE*(*)
       INTEGER NLOW,NUP
       REAL*8 WAVE,WAVE0,AEXT,GAML
       REAL TEMP,XXNE
-      INTEGER NSLOT,NOUT,NMAXG,NFFT,NLG
-      PARAMETER (NSLOT=128, NOUT=1200, NMAXG=8191, NFFT=32768, NLG=600)
+      INTEGER NSLOT,NOUT,NMAXG,NFFT,NLG,NK
+      INTEGER NENT
+      PARAMETER (NSLOT=8192, NOUT=1200, NMAXG=8191, NFFT=32768, NLG=600,
+     *           NK=7, NENT=3*NSLOT/4)
       REAL*8 PI
       PARAMETER (PI=3.14159265358979D0)
-      INTEGER KN(NSLOT),KM(NSLOT),NEXT,IS,I,K,NG,NH,NF
-      REAL*8 KW(NSLOT),KT(NSLOT),KNE(NSLOT),KA(NSLOT),KG(NSLOT)
-      REAL*8 RCS(NSLOT),XO(NOUT,NSLOT),YB(NOUT,NSLOT),YR(NOUT,NSLOT)
-      REAL*8 Y0(NSLOT),CV(NMAXG)
-      COMPLEX*16 FA(NFFT)
-      REAL P0,PV,PV2
+      INTEGER NUSED,IGEN,IS,I,K,NG,NH,NF,IDX(NSLOT)
+      LOGICAL HIT
+      REAL*8 KEY(NK),KEYS(NK,NENT),LHS(NENT),LRCS(NENT),RCS(NENT)
+      REAL*8 Y0(NENT),CV(NMAXG)
+      REAL YB(NOUT,NENT),YR(NOUT,NENT)
+      REAL*8 RA(NFFT)
+      COMPLEX*16 CS(NFFT/2+1),ZW(NFFT/2)
+      REAL P0,PV,PV2,PR1,PB1
       REAL*8 WT,W,WMIN,RC,G,H,X,AK,SUMS,AREA,XMIN,X1,X2,R,WW,YL,YH,PHI
-      REAL*8 AD,D
+      REAL*8 AD,D,XO
       SAVE
-      DATA KN/NSLOT*0/, KM/NSLOT*0/, NEXT/1/
+      DATA IDX/NSLOT*0/, NUSED/0/, IGEN/0/
 C
-      DO 10 IS = 1, NSLOT
-        IF ((KN(IS).EQ.NLOW).AND.(KM(IS).EQ.NUP).AND.(KW(IS).EQ.WAVE0)
-     *      .AND.(KT(IS).EQ.DBLE(TEMP)).AND.(KNE(IS).EQ.DBLE(XXNE))
-     *      .AND.(KA(IS).EQ.AEXT).AND.(KG(IS).EQ.GAML)) GOTO 50
-   10 CONTINUE
+      KEY(1) = DBLE(NLOW)
+      KEY(2) = DBLE(NUP)
+      KEY(3) = WAVE0
+      KEY(4) = DBLE(TEMP)
+      KEY(5) = DBLE(XXNE)
+      KEY(6) = AEXT
+      KEY(7) = GAML
+      CALL HLCKEY(KEY,NK,KEYS,NSLOT,IDX,NENT,NUSED,IGEN,IS,HIT)
+      IF (HIT) GOTO 50
 C
 C  Build.  Width of the tabulated profile from its peak.
 C
-      IS = NEXT
-      NEXT = MOD(NEXT,NSLOT) + 1
       CALL STEHLE(HFILE,WAVE0,WAVE0,TEMP,XXNE,NLOW,NUP,P0)
       WT = 0.5D0/DBLE(P0)
       W = MAX(WT,AEXT,GAML)
@@ -463,62 +473,63 @@ C  component is extremely narrow)
       IF (NF.LT.4*NG) GOTO 15
       IF (NF.GT.NFFT) STOP 'HLPCONV: NFFT too small'
       DO 20 I = 1, NF
-        FA(I) = (0.D0,0.D0)
+        RA(I) = 0.D0
    20 CONTINUE
+C  (both sides at once, STEHL2)
       SUMS = 0.D0
-      DO 21 I = 1, NG
+      DO 21 I = NH+1, NG
         X = DBLE(I-NH-1)*H
-        CALL STEHLE(HFILE,WAVE0+X,WAVE0,TEMP,XXNE,NLOW,NUP,PV)
-        FA(I) = DCMPLX(DBLE(MAX(PV,0.)),0.D0)
-        SUMS = SUMS + DBLE(FA(I))
+        CALL STEHL2(HFILE,WAVE0+X,WAVE0,TEMP,XXNE,NLOW,NUP,PV,PV2,1)
+        RA(I) = DBLE(MAX(PV,0.))
+        RA(2*NH+2-I) = DBLE(MAX(PV2,0.))
    21 CONTINUE
+      DO 19 I = 1, NG
+        SUMS = SUMS + RA(I)
+   19 CONTINUE
       SUMS = SUMS*H
 C  area of the tabulated profile within +-G (log grid, both sides)
       XMIN = MIN(1.D-4, H/4.D0)
       AREA = 2.D0*DBLE(P0)*XMIN
+      X1 = XMIN
+      CALL STEHL2(HFILE,WAVE0+X1,WAVE0,TEMP,XXNE,NLOW,NUP,PR1,PB1,1)
       DO 22 K = 1, NLG-1
         X1 = XMIN*(G/XMIN)**(DBLE(K-1)/DBLE(NLG-1))
         X2 = XMIN*(G/XMIN)**(DBLE(K)/DBLE(NLG-1))
-        CALL STEHLE(HFILE,WAVE0+X1,WAVE0,TEMP,XXNE,NLOW,NUP,PV)
-        CALL STEHLE(HFILE,WAVE0+X2,WAVE0,TEMP,XXNE,NLOW,NUP,PV2)
-        AREA = AREA + 0.5D0*(DBLE(PV)+DBLE(PV2))*(X2-X1)
-        CALL STEHLE(HFILE,WAVE0-X1,WAVE0,TEMP,XXNE,NLOW,NUP,PV)
-        CALL STEHLE(HFILE,WAVE0-X2,WAVE0,TEMP,XXNE,NLOW,NUP,PV2)
-        AREA = AREA + 0.5D0*(DBLE(PV)+DBLE(PV2))*(X2-X1)
+        CALL STEHL2(HFILE,WAVE0+X2,WAVE0,TEMP,XXNE,NLOW,NUP,PV,PV2,1)
+        AREA = AREA + 0.5D0*(DBLE(PR1)+DBLE(PV))*(X2-X1)
+        PR1 = PV
+        AREA = AREA + 0.5D0*(DBLE(PB1)+DBLE(PV2))*(X2-X1)
+        PB1 = PV2
    22 CONTINUE
       IF (SUMS.GT.0.D0) THEN
         DO 23 I = 1, NG
-          FA(I) = FA(I)*AREA/SUMS
+          RA(I) = RA(I)*AREA/SUMS
    23   CONTINUE
       ENDIF
-      CALL HLFFT(FA,NF,1)
-      DO 25 I = 1, NF
+      CALL HLRFFT(RA,CS,NF,1,ZW)
+      DO 25 I = 1, NF/2+1
         K = I - 1
-        IF (K.GE.NF/2) K = K - NF
         AK = DBLE(K)/(DBLE(NF)*H)
-        FA(I) = FA(I)*EXP(-(PI*AEXT*AK)**2 - 2.D0*PI*GAML*ABS(AK))
+        CS(I) = CS(I)*EXP(-(PI*AEXT*AK)**2 - 2.D0*PI*GAML*ABS(AK))
    25 CONTINUE
-      CALL HLFFT(FA,NF,-1)
+      CALL HLRFFT(RA,CS,NF,-1,ZW)
       DO 30 I = 1, NG
-        CV(I) = MAX(DBLE(FA(I))/DBLE(NF), 0.D0)
+        CV(I) = MAX(RA(I)/DBLE(NF), 0.D0)
    30 CONTINUE
 C  store on a log grid of |dlambda|; YR: dlambda > 0, YB: dlambda < 0
       Y0(IS) = CV(NH+1)
       DO 40 K = 1, NOUT
-        XO(K,IS) = H*(RC/H)**(DBLE(K-1)/DBLE(NOUT-1))
-        R = XO(K,IS)/H
+        XO = H*(RC/H)**(DBLE(K-1)/DBLE(NOUT-1))
+        R = XO/H
         I = INT(R)
         WW = R - DBLE(I)
-        YR(K,IS) = LOG(MAX((1.D0-WW)*CV(NH+1+I)+WW*CV(NH+2+I),1.D-300))
-        YB(K,IS) = LOG(MAX((1.D0-WW)*CV(NH+1-I)+WW*CV(NH-I),1.D-300))
+        YR(K,IS) = REAL((1.D0-WW)*LOG(MAX(CV(NH+1+I),1.D-300))+WW*
+     *            LOG(MAX(CV(NH+2+I),1.D-300)))
+        YB(K,IS) = REAL((1.D0-WW)*LOG(MAX(CV(NH+1-I),1.D-300))+WW*
+     *            LOG(MAX(CV(NH-I),1.D-300)))
    40 CONTINUE
-      KN(IS) = NLOW
-      KM(IS) = NUP
-      KW(IS) = WAVE0
-      KT(IS) = DBLE(TEMP)
-      KNE(IS) = DBLE(XXNE)
-      KA(IS) = AEXT
-      KG(IS) = GAML
+      LHS(IS) = LOG(H)
+      LRCS(IS) = LOG(RC)
       RCS(IS) = RC
 C
 C  Evaluate
@@ -526,24 +537,23 @@ C
    50 D = WAVE - WAVE0
       AD = ABS(D)
       IF (AD.LE.RCS(IS)) THEN
-        IF (AD.LT.XO(1,IS)) THEN
+        IF (AD.LT.EXP(LHS(IS))) THEN
           IF (D.GE.0.D0) THEN
-            YH = EXP(YR(1,IS))
+            YH = EXP(DBLE(YR(1,IS)))
           ELSE
-            YH = EXP(YB(1,IS))
+            YH = EXP(DBLE(YB(1,IS)))
           ENDIF
-          PHI = Y0(IS) + (YH-Y0(IS))*AD/XO(1,IS)
+          PHI = Y0(IS) + (YH-Y0(IS))*AD/EXP(LHS(IS))
         ELSE
-          R = 1.D0 + DBLE(NOUT-1)*LOG(AD/XO(1,IS))/
-     *        LOG(XO(NOUT,IS)/XO(1,IS))
+          R = 1.D0 + DBLE(NOUT-1)*(LOG(AD)-LHS(IS))/(LRCS(IS)-LHS(IS))
           K = MIN(INT(R),NOUT-1)
-          WW = (LOG(AD)-LOG(XO(K,IS)))/(LOG(XO(K+1,IS))-LOG(XO(K,IS)))
+          WW = R - DBLE(K)
           IF (D.GE.0.D0) THEN
-            YL = YR(K,IS)
-            YH = YR(K+1,IS)
+            YL = DBLE(YR(K,IS))
+            YH = DBLE(YR(K+1,IS))
           ELSE
-            YL = YB(K,IS)
-            YH = YB(K+1,IS)
+            YL = DBLE(YB(K,IS))
+            YH = DBLE(YB(K+1,IS))
           ENDIF
           PHI = EXP((1.D0-WW)*YL + WW*YH)
         ENDIF
@@ -556,6 +566,20 @@ C
       END
 
       SUBROUTINE STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
+C
+C  Tabulated profile at WAVE (see STEHL2).
+C
+      CHARACTER HFILE*(*)
+      DOUBLE PRECISION WAVE,WAVE0
+      REAL TEMP,XXNE,HLIN,HDUM
+      INTEGER NLOW,NUP
+      CALL STEHL2(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN,HDUM,0)
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE STEHL2(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN,
+     *                  HLINM,IBOTH)
 C
 C  N Piskunov's code to return Stehle Stark profiles
 C
@@ -575,6 +599,10 @@ C    - below the first density (1e10): the first profile is used in
 C      wavelength units (Doppler-dominated cores).
 C  Outside the temperature range HLIN = -1 is returned (caller falls 
 C  back to HLINOP).
+C  Nov 2026: with IBOTH = 1 also HLINM, the profile at the mirror point
+C  2*WAVE0 - WAVE (the tabulated profiles depend on |dlambda| only; the
+C  extrapolated far wing has a factor sqrt(lambda/lambda0)), so that a
+C  profile on a symmetric grid takes half the work.
 C
       DOUBLE PRECISION WAVE,WAVE0
       PARAMETER (NWL=60,NTEMP=10,NNE=20,NLINE=90,SQRTPI=1.77245385)
@@ -588,10 +616,27 @@ C
       CHARACTER HFILE*(*)
       INTEGER CONVOLUTION_MODE
       COMMON /HLCONV/ CONVOLUTION_MODE
-      REAL*8 STHPCH
+      REAL*8 STHPCH,STHPD
+C  log10 alpha, log10 S and the monotone-cubic slopes, computed once 
+C  when the table is read (the interpolation then needs no logarithms
+C  of table values and finds the interval by bisection)
+      REAL LALPHA(NWL,NTEMP,NNE,NLINE),LSPROF(NWL,NTEMP,NNE,NLINE)
+      REAL*8 SLOPE(NWL,NTEMP,NNE,NLINE),LALD(NWL,NTEMP,NNE,NLINE),
+     *       LSPD(NWL,NTEMP,NNE,NLINE)
+C  the temperature and density part of the last call
+      INTEGER LLINE,LITEMP,LINE_,LJMAX
+      REAL LTEMP,LXXNE,LDT1,LDT2,LDNE1,LDNE2,LF0A,LF0B
+      INTEGER LINE2
+      INTEGER ICOR,ITC(4),INC(4),KLO,KHI,KMID,NA
+      REAL WCOR(4),F0C(4),SC(4),SCM(4),SM
+      INTEGER IBOTH
+      REAL HLINM
       SAVE T,XNE,WING,F0,WIDTH,ALPHA,SPROF,NALPHA,
-     *     NWL1,NTEMP1,NNE1,NLINE1,FIRST,LINDEX
-      DATA FIRST/.TRUE./,LINDEX/10000*0/
+     *     NWL1,NTEMP1,NNE1,NLINE1,FIRST,LINDEX,LALPHA,LSPROF,SLOPE,
+     *     LALD,LSPD,
+     *     LLINE,LITEMP,LINE_,LJMAX,LTEMP,LXXNE,LDT1,LDT2,LDNE1,LDNE2,
+     *     LF0A,LF0B
+      DATA FIRST/.TRUE./,LINDEX/10000*0/,LLINE/0/
       EXP10(X)=EXP(2.30258509299405E0*X)
 C
 C  Read in the table (this is done only once)
@@ -669,13 +714,33 @@ C  profile; the table built from CDS has none, older tables did.
         DO 23 J=1,NNE1
         DO 23 I=1,NTEMP1
         DO 22 K=1,NALPHA(I,J,L)
-        IF(SPROF(K,I,J,L).LE.0..OR.
-     *     (K.GT.1.AND.ALPHA(K,I,J,L).LE.ALPHA(K-1,I,J,L))) THEN
+        IF(SPROF(K,I,J,L).LE.0.) THEN
           NALPHA(I,J,L)=K-1
           GO TO 23
         END IF
+C  (separate test: .AND. need not short-circuit, ALPHA(0) out of bounds)
+        IF(K.GT.1) THEN
+          IF(ALPHA(K,I,J,L).LE.ALPHA(K-1,I,J,L)) THEN
+            NALPHA(I,J,L)=K-1
+            GO TO 23
+          END IF
+        END IF
    22   CONTINUE
    23   CONTINUE
+        DO 26 L=1,NLINE1
+        DO 26 J=1,NNE1
+        DO 26 I=1,NTEMP1
+        NA=NALPHA(I,J,L)
+        DO 24 K=2,NA
+        LALPHA(K,I,J,L)=LOG10(ALPHA(K,I,J,L))
+        LSPROF(K,I,J,L)=LOG10(SPROF(K,I,J,L))
+        LALD(K,I,J,L)=LOG10(DBLE(ALPHA(K,I,J,L)))
+        LSPD(K,I,J,L)=LOG10(DBLE(SPROF(K,I,J,L)))
+   24   CONTINUE
+        DO 25 K=2,NA
+        SLOPE(K,I,J,L)=STHPD(K,NA,ALPHA(1,I,J,L),SPROF(1,I,J,L))
+   25   CONTINUE
+   26   CONTINUE
         IF(LINDEX(NLOW,NUP).GT.0) WRITE(*,*) 
      *    'Will use Stehle''s tables for Hydrogen line profiles'
       END IF
@@ -688,13 +753,39 @@ C  Check if line is in the table
 C
       IF(LINE.EQ.0) THEN
         HLIN=-1.
+        HLINM=-1.
         RETURN
       END IF
+C
+C  Temperature and density part (kept from the last call when the line,
+C  temperature and density are the same)
+C
+      IF((LINE.EQ.LLINE).AND.(TEMP.EQ.LTEMP).AND.(XXNE.EQ.LXXNE)) THEN
+        IF(LITEMP.EQ.0) THEN
+          HLIN=-1.
+          HLINM=-1.
+          RETURN
+        END IF
+        ITEMP=LITEMP
+        INE=LINE_
+        DT1=LDT1
+        DT2=LDT2
+        DNE1=LDNE1
+        DNE2=LDNE2
+        F0A=LF0A
+        F0B=LF0B
+        GO TO 30
+      END IF
+      LLINE=LINE
+      LTEMP=TEMP
+      LXXNE=XXNE
+      LITEMP=0
 C
 C  Temperature interpolation (no extrapolation)
 C
       IF(TEMP.LT.T(1).OR.TEMP.GT.T(NTEMP1)) THEN
         HLIN=-1.
+        HLINM=-1.
         RETURN
       END IF
       ITEMP=2
@@ -718,6 +809,7 @@ C  both bracketing temperatures.
       END IF
       IF(JMAX.EQ.0) THEN
         HLIN=-1.
+        HLINM=-1.
         RETURN
       END IF
       ANE=LOG10(XXNE)
@@ -748,7 +840,16 @@ C  Above the line's last tabulated density: quasistatic scaling
         F0A=F0(INE-1,LINE)
         F0B=F0(INE,LINE)
       END IF
-C  Interpolate over alpha. For each IT and IN we consider 3 cases:
+      LITEMP=ITEMP
+      LINE_=INE
+      LDT1=DT1
+      LDT2=DT2
+      LDNE1=DNE1
+      LDNE2=DNE2
+      LF0A=F0A
+      LF0B=F0B
+C  Interpolate over alpha. For each of the four (T, n_e) corners with
+C  non-zero density weight, 3 cases:
 C  1. alpha is in the first interval - simple linear interpolation
 C     (.LE.: at alpha = ALPHA(2) the log branch would use ALPHA(1) = 0)
 C  2. alpha is outside the table     - extrapolate using wing parameter
@@ -757,137 +858,82 @@ C     (log alpha, log S) with HLINOP_SET_CONVOLUTION(0); by default a
 C     monotone cubic (STHPCH), because the linear form lies below the 
 C     profile in Doppler-dominated cores (half widths 1-6 per cent too 
 C     small, areas 0.96-0.99 instead of 1)
-C  Only the corners with non-zero density weight are evaluated.
 C
-      S11=0.
-      IF(DNE2.GT.0.) THEN
-      IT=ITEMP-1
-      IN=INE-1
-      ALP=ABS(WAVE-WAVE0)/F0A
+   30 ITC(1)=ITEMP-1
+      INC(1)=INE-1
+      F0C(1)=F0A
+      WCOR(1)=DNE2
+      ITC(2)=ITEMP
+      INC(2)=INE-1
+      F0C(2)=F0A
+      WCOR(2)=DNE2
+      ITC(3)=ITEMP-1
+      INC(3)=INE
+      F0C(3)=F0B
+      WCOR(3)=DNE1
+      ITC(4)=ITEMP
+      INC(4)=INE
+      F0C(4)=F0B
+      WCOR(4)=DNE1
+      DO 40 ICOR=1,4
+      SC(ICOR)=0.
+      SCM(ICOR)=0.
+      IF(WCOR(ICOR).LE.0.) GO TO 40
+      IT=ITC(ICOR)
+      IN=INC(ICOR)
+      NA=NALPHA(IT,IN,LINE)
+      ALP=ABS(WAVE-WAVE0)/F0C(ICOR)
       IF(ALP.LE.ALPHA(2,IT,IN,LINE)) THEN
         DAL=ALPHA(2,IT,IN,LINE)-ALPHA(1,IT,IN,LINE)
         DAL1=(ALP-ALPHA(1,IT,IN,LINE))/DAL
         DAL2=(ALPHA(2,IT,IN,LINE)-ALP)/DAL
-        S11=DAL2*SPROF(1,IT,IN,LINE)+DAL1*SPROF(2,IT,IN,LINE)
-      ELSE IF(ALP.GT.ALPHA(NALPHA(IT,IN,LINE),IT,IN,LINE)) THEN
-        S11=WING(IN,LINE)/(ALP*ALP*SQRT(ALP))*SQRT(WAVE/WAVE0)
+        S=DAL2*SPROF(1,IT,IN,LINE)+DAL1*SPROF(2,IT,IN,LINE)
+      ELSE IF(ALP.GT.ALPHA(NA,IT,IN,LINE)) THEN
+        S=WING(IN,LINE)/(ALP*ALP*SQRT(ALP))*SQRT(WAVE/WAVE0)
+        IF(IBOTH.EQ.1) THEN
+          SM=WING(IN,LINE)/(ALP*ALP*SQRT(ALP))*
+     *       SQRT((2.D0*WAVE0-WAVE)/WAVE0)
+          SCM(ICOR)=LOG10(SM/F0C(ICOR))
+        END IF
+        SC(ICOR)=LOG10(S/F0C(ICOR))
+        GO TO 40
       ELSE
         ALP=LOG10(ALP)
-        K=2
-   5  IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
-     *     K.LT.NALPHA(IT,IN,LINE)) THEN
-          K=K+1
-          GO TO 5
+C  first K in 2..NA with log10 alpha(K) >= ALP (NA if none)
+        KLO=2
+        KHI=NA
+   31   IF(KLO.LT.KHI) THEN
+          KMID=(KLO+KHI)/2
+          IF(LALPHA(KMID,IT,IN,LINE).LT.ALP) THEN
+            KLO=KMID+1
+          ELSE
+            KHI=KMID
+          END IF
+          GO TO 31
         END IF
-        DAL=LOG10(ALPHA(K,IT,IN,LINE))-LOG10(ALPHA(K-1,IT,IN,LINE))
-        DAL1=(ALP-LOG10(ALPHA(K-1,IT,IN,LINE)))/DAL
-        DAL2=(LOG10(ALPHA(K,IT,IN,LINE))-ALP)/DAL
-        S11=DAL2*LOG10(SPROF(K-1,IT,IN,LINE))+
-     +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
-        S11=EXP10(S11)
-        IF (CONVOLUTION_MODE.EQ.1) S11=STHPCH(DBLE(ALP),K,
-     *     NALPHA(IT,IN,LINE),ALPHA(1,IT,IN,LINE),SPROF(1,IT,IN,LINE))
-      END IF
-      S11=LOG10(S11/F0A)
-      END IF
-C
-      S21=0.
-      IF(DNE2.GT.0.) THEN
-      IT=ITEMP
-      IN=INE-1
-      ALP=ABS(WAVE-WAVE0)/F0A
-      IF(ALP.LE.ALPHA(2,IT,IN,LINE)) THEN
-        DAL=ALPHA(2,IT,IN,LINE)-ALPHA(1,IT,IN,LINE)
-        DAL1=(ALP-ALPHA(1,IT,IN,LINE))/DAL
-        DAL2=(ALPHA(2,IT,IN,LINE)-ALP)/DAL
-        S21=DAL2*SPROF(1,IT,IN,LINE)+DAL1*SPROF(2,IT,IN,LINE)
-      ELSE IF(ALP.GT.ALPHA(NALPHA(IT,IN,LINE),IT,IN,LINE)) THEN
-        S21=WING(IN,LINE)/(ALP*ALP*SQRT(ALP))*SQRT(WAVE/WAVE0)
-      ELSE
-        ALP=LOG10(ALP)
-        K=2
-   6  IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
-     *     K.LT.NALPHA(IT,IN,LINE)) THEN
-          K=K+1
-          GO TO 6
+        K=MAX(KLO,3)
+        IF (CONVOLUTION_MODE.EQ.1) THEN
+          S=STHPCH(DBLE(ALP),K,LALD(1,IT,IN,LINE),
+     *             LSPD(1,IT,IN,LINE),SLOPE(1,IT,IN,LINE))
+        ELSE
+          DAL=LALPHA(K,IT,IN,LINE)-LALPHA(K-1,IT,IN,LINE)
+          DAL1=(ALP-LALPHA(K-1,IT,IN,LINE))/DAL
+          DAL2=(LALPHA(K,IT,IN,LINE)-ALP)/DAL
+          S=DAL2*LSPROF(K-1,IT,IN,LINE)+DAL1*LSPROF(K,IT,IN,LINE)
+          S=EXP10(S)
         END IF
-        DAL=LOG10(ALPHA(K,IT,IN,LINE))-LOG10(ALPHA(K-1,IT,IN,LINE))
-        DAL1=(ALP-LOG10(ALPHA(K-1,IT,IN,LINE)))/DAL
-        DAL2=(LOG10(ALPHA(K,IT,IN,LINE))-ALP)/DAL
-        S21=DAL2*LOG10(SPROF(K-1,IT,IN,LINE))+
-     +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
-        S21=EXP10(S21)
-        IF (CONVOLUTION_MODE.EQ.1) S21=STHPCH(DBLE(ALP),K,
-     *     NALPHA(IT,IN,LINE),ALPHA(1,IT,IN,LINE),SPROF(1,IT,IN,LINE))
       END IF
-      S21=LOG10(S21/F0A)
-      END IF
-C
-      S12=0.
-      IF(DNE1.GT.0.) THEN
-      IT=ITEMP-1
-      IN=INE
-      ALP=ABS(WAVE-WAVE0)/F0B
-      IF(ALP.LE.ALPHA(2,IT,IN,LINE)) THEN
-        DAL=ALPHA(2,IT,IN,LINE)-ALPHA(1,IT,IN,LINE)
-        DAL1=(ALP-ALPHA(1,IT,IN,LINE))/DAL
-        DAL2=(ALPHA(2,IT,IN,LINE)-ALP)/DAL
-        S12=DAL2*SPROF(1,IT,IN,LINE)+DAL1*SPROF(2,IT,IN,LINE)
-      ELSE IF(ALP.GT.ALPHA(NALPHA(IT,IN,LINE),IT,IN,LINE)) THEN
-        S12=WING(IN,LINE)/(ALP*ALP*SQRT(ALP))*SQRT(WAVE/WAVE0)
-      ELSE
-        ALP=LOG10(ALP)
-        K=2
-   7  IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
-     *     K.LT.NALPHA(IT,IN,LINE)) THEN
-          K=K+1
-          GO TO 7
-        END IF
-        DAL=LOG10(ALPHA(K,IT,IN,LINE))-LOG10(ALPHA(K-1,IT,IN,LINE))
-        DAL1=(ALP-LOG10(ALPHA(K-1,IT,IN,LINE)))/DAL
-        DAL2=(LOG10(ALPHA(K,IT,IN,LINE))-ALP)/DAL
-        S12=DAL2*LOG10(SPROF(K-1,IT,IN,LINE))+
-     +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
-        S12=EXP10(S12)
-        IF (CONVOLUTION_MODE.EQ.1) S12=STHPCH(DBLE(ALP),K,
-     *     NALPHA(IT,IN,LINE),ALPHA(1,IT,IN,LINE),SPROF(1,IT,IN,LINE))
-      END IF
-      S12=LOG10(S12/F0B)
-      END IF
-C
-      S22=0.
-      IF(DNE1.GT.0.) THEN
-      IT=ITEMP
-      IN=INE
-      ALP=ABS(WAVE-WAVE0)/F0B
-      IF(ALP.LE.ALPHA(2,IT,IN,LINE)) THEN
-        DAL=ALPHA(2,IT,IN,LINE)-ALPHA(1,IT,IN,LINE)
-        DAL1=(ALP-ALPHA(1,IT,IN,LINE))/DAL
-        DAL2=(ALPHA(2,IT,IN,LINE)-ALP)/DAL
-        S22=DAL2*SPROF(1,IT,IN,LINE)+DAL1*SPROF(2,IT,IN,LINE)
-      ELSE IF(ALP.GT.ALPHA(NALPHA(IT,IN,LINE),IT,IN,LINE)) THEN
-        S22=WING(IN,LINE)/(ALP*ALP*SQRT(ALP))*SQRT(WAVE/WAVE0)
-      ELSE
-        ALP=LOG10(ALP)
-        K=2
-   8  IF(LOG10(ALPHA(K,IT,IN,LINE)).LT.ALP.AND.
-     *     K.LT.NALPHA(IT,IN,LINE)) THEN
-          K=K+1
-          GO TO 8
-        END IF
-        DAL=LOG10(ALPHA(K,IT,IN,LINE))-LOG10(ALPHA(K-1,IT,IN,LINE))
-        DAL1=(ALP-LOG10(ALPHA(K-1,IT,IN,LINE)))/DAL
-        DAL2=(LOG10(ALPHA(K,IT,IN,LINE))-ALP)/DAL
-        S22=DAL2*LOG10(SPROF(K-1,IT,IN,LINE))+
-     +      DAL1*LOG10(SPROF(K,  IT,IN,LINE))
-        S22=EXP10(S22)
-        IF (CONVOLUTION_MODE.EQ.1) S22=STHPCH(DBLE(ALP),K,
-     *     NALPHA(IT,IN,LINE),ALPHA(1,IT,IN,LINE),SPROF(1,IT,IN,LINE))
-      END IF
-      S22=LOG10(S22/F0B)
-      END IF
+      SC(ICOR)=LOG10(S/F0C(ICOR))
+      SCM(ICOR)=SC(ICOR)
+   40 CONTINUE
+      S11=SC(1)
+      S21=SC(2)
+      S12=SC(3)
+      S22=SC(4)
 C  Interpolate over T and Ne
       HLIN=EXP10(DT2*DNE2*S11+DT1*DNE2*S21+DT2*DNE1*S12+DT1*DNE1*S22)
+      IF(IBOTH.EQ.1) HLINM=EXP10(DT2*DNE2*SCM(1)+DT1*DNE2*SCM(2)+
+     *                     DT2*DNE1*SCM(3)+DT1*DNE1*SCM(4))
       RETURN
 C
 C  I/O error processing
@@ -908,27 +954,27 @@ C
       STOP
       END
 
-      REAL*8 FUNCTION STHPCH(XL,K,NA,AA,SS)
+      REAL*8 FUNCTION STHPCH(XL,K,XA,YA,DD)
 C
 C  Monotone cubic Hermite interpolation (Fritsch & Carlson 1980; the 
 C  PCHIP form) of log10 S against log10 alpha at XL = log10 alpha, in 
 C  the interval of nodes K-1 and K (K-1 >= 2: node 1 is alpha = 0).  
-C  AA, SS: the NA tabulated alpha and S of one profile.  Passes through
-C  the nodes and keeps the profile monotonic between them.  Returns S.
+C  XA, YA: log10 alpha and log10 S at the nodes of one profile; DD: the
+C  slopes at the nodes (STHPD).  Passes through the nodes and keeps the
+C  profile monotonic between them.  Returns S.
 C
       IMPLICIT NONE
-      INTEGER K,NA
-      REAL*8 XL
-      REAL AA(*),SS(*)
-      REAL*8 X0,X1,Y0,Y1,H,T,D0,D1,STHPD
-      X0 = LOG10(DBLE(AA(K-1)))
-      X1 = LOG10(DBLE(AA(K)))
-      Y0 = LOG10(DBLE(SS(K-1)))
-      Y1 = LOG10(DBLE(SS(K)))
+      INTEGER K
+      REAL*8 XL,DD(*),XA(*),YA(*)
+      REAL*8 X0,X1,Y0,Y1,H,T,D0,D1
+      X0 = XA(K-1)
+      X1 = XA(K)
+      Y0 = YA(K-1)
+      Y1 = YA(K)
       H = X1 - X0
       T = (XL - X0)/H
-      D0 = STHPD(K-1,NA,AA,SS)
-      D1 = STHPD(K,NA,AA,SS)
+      D0 = DD(K-1)
+      D1 = DD(K)
       STHPCH = 10.D0**((2.D0*T**3-3.D0*T**2+1.D0)*Y0
      *       + (T**3-2.D0*T**2+T)*H*D0 + (-2.D0*T**3+3.D0*T**2)*Y1
      *       + (T**3-T**2)*H*D1)
