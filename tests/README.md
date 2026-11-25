@@ -50,6 +50,7 @@ None at present.
 
 ### Fixed (Nov 2026)
 
+- **`HBOP` returned Inf/NaN beyond about 5 µm.** Far redward of an edge the extrapolated `HBF` overflowed while the taper had underflowed to 0. Such levels are now skipped.
 - **The dissolution edge in `HBOP` was in the wrong place.** n\* was computed with `IONH` (the infinite-mass Rydberg) instead of the code's own level energies (R_H), which put the n = 2 dissolution edge 2 Å blueward of the series limit. The air wavelength was also used as if it were in vacuum. `HBNSTAR` now uses the code's level energies, and the continuum is computed in vacuum wavelengths (`WAVE` is in air above 2000 Å, as for the lines). The edge now coincides with the series limit at which `HLINOP` cuts the lines.
 - **Self-broadening density.** `HBOP` passed the ground-state population `NP(1)` as the H I density for broadening by hydrogen; it now passes `NH`.
 - **`HPROFL` added the broadening mechanisms outside the core.** Inside the core it used the dominant mechanism; outside it, it added all of them. Where Doppler broadening dominated, this added 2–39% to the area and left Stark broadening out of the core. The mechanisms are now convolved (`HPCONV`). Areas are 1 to 0.1%. The end-to-end test compares `HPROFL` with the Doppler-convolved Stehlé & Hutcheon profiles (within 10%).

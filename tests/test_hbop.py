@@ -94,3 +94,12 @@ def test_dissolution_edge_is_the_series_limit():
         cut_air = H.nstar([(limit_vac, nlo)])[0, 2]
         out = H.nstar([(cut_air - 0.01, nlo), (cut_air + 0.01, nlo)])
         assert out[0, 4] == 0.0 and out[1, 4] > 100.0
+
+
+def test_hbop_is_finite_in_the_infrared():
+    """Far redward of an edge the extrapolated HBF overflows while the red-wing taper underflows;
+    such levels are skipped (TOTAL and CONTIN were Inf at 6 micron and NaN at 8 micron)."""
+    _, nh, nhe, ne, T = HBOP_CONDITIONS[0]
+    lines = [(2, m, H.line_centre(2, m)) for m in range(3, 31)]
+    tot, cont = H.hbop(nh, nhe, ne, T, H.doppler(T), lines, [40000.0, 60000.0, 80000.0, 120000.0])
+    assert np.all(np.isfinite(tot)) and np.all(np.isfinite(cont)) and np.all(cont > 0)

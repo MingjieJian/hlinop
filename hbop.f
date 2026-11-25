@@ -129,6 +129,8 @@ C  Nov 2026, line broadening by H with the total H I density NH
 C            (was the ground-state population NP(1))
 C  Nov 2026, dissolved fraction from the code's own level energies
 C            in vacuum wavelengths (HBNSTAR)
+C  Nov 2026, levels whose red-wing taper has underflowed are skipped
+C            (Inf/NaN beyond about 5 micron)
 C  Nov 2026, line profiles from HLINPROF (Stehle & Hutcheon tables for
 C            Lyman beta and up, Balmer and Paschen to n_up = 30; HLINOP
 C            otherwise) with the HLINOP cutoffs; HBOP_SET_LINE_PROFILE
@@ -280,8 +282,12 @@ C  air wavelength was used as if in vacuum)
         REDCUT = 1.D8/(EHYD(I+1)-EHYD(I))
         IF (WAVEV .GT. REDCUT) TAPER = DEXP((REDCUT-WAVEV)*1.D-2)
       ENDIF	
-      CHI = (NP(I) - NLTE(I)*DEXP(-HC/(WAVEV*1E-8)/KT)) * 
-     *       D * HBF(WAVEV, I) * TAPER
+C  Far redward of the alpha line the taper underflows to 0 while the 
+C  extrapolated cross section HBF may overflow (0 * Inf = NaN beyond 
+C  about 5 micron before Nov 2026): skip such levels
+      CHI = 0.
+      IF (TAPER.GT.1.D-30) CHI = (NP(I) - NLTE(I)*DEXP(-HC/(WAVEV*1E-8)
+     *       /KT)) * D * HBF(WAVEV, I) * TAPER
 CC      ENDIF
  40   CONTIN = CONTIN + CHI
 C
