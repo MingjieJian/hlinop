@@ -29,7 +29,8 @@ GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux fo
    - `HLINOP` equals `HPROFL` × `HLCUT` (the cutoff weight that HBOP applies to tabulated profiles);
    - `HLINPROF` returns the CDS profiles at table nodes (`data/stehle_cds_subset.json`, from `make_cds_subset.py`), has unit area within the tables' own normalisation, scales quasistatically above a line's last density, and returns HLINOP where there is no table;
    - `HBOP` uses the tabulated profiles by default and cuts them at the series limit;
-   - the cached convolutions give the same numbers whatever the call order (grouped by line and depth, or wavelength by wavelength as a synthesis code calls them), and the cache index `HLCKEY` stores, finds and empties correctly, also on `HLINOP_CLEAR_CACHE` (`test_cache.py`).
+   - the cached convolutions give the same numbers whatever the call order (grouped by line and depth, or wavelength by wavelength as a synthesis code calls them), and the cache index `HLCKEY` stores, finds and empties correctly, also on `HLINOP_CLEAR_CACHE` (`test_cache.py`);
+   - interfaces for synthesis codes (`test_interface.py`): `HLINPROF_SET_FILES` uses the given table, `HLINPROF_SOURCE` reports the fallback to HLINOP, and `HBOP_BF` with `HBOP_LEVELS` equals the continuum of `HBOP` bit for bit.
 
    A physics test that the current code fails is marked `known_issue` and `xfail` with the reason. `xfail_strict` is on, so once a fix lands the test reports XPASS and fails. The `xfail` mark must then be removed in the same change. The suite therefore records which problems are known and when each one was fixed.
 
@@ -67,4 +68,4 @@ None at present.
 
 3. **`STARK1` cache key.** The old `STARK1` caches `C1CON`/`C2CON`, which depend on `WAVEH`, keyed on (N, M) only, so a call with the same (N, M) and a different line centre reuses stale values. It is still so in `STARK1L`, kept unchanged. `STARK1PARTS`, used by the convolved profile, keys on (N, M, `WAVEH`).
 4. **Undefined variable in `STARK1L`.** The old `STARK1`, now `STARK1L`, computes `T3NHE` from `HE1FRC`, which is not one of its arguments; the value is never used. It is removed in `STARK1PARTS`.
-8. **`hlinprof.f` does not compile on its own.** It needs a `DATA.FILES` include that only `SYNTH/Makefile` generates. The tests generate it themselves.
+8. **`hlinprof.f` does not compile on its own.** It needs a `DATA.FILES` include that only `SYNTH/Makefile` generates (the names can be overridden at run time with `HLINPROF_SET_FILES`, but the include is still needed to compile). The tests generate it themselves.

@@ -32,6 +32,8 @@ PROGRAMS = {
     "drv_hbop_auto": ["hbop_auto.f", "hbop.f", "hlinprof.f", "hlinop.f"],
     "drv_states": ["hlinprof.f", "hlinop.f"],
     "drv_hlckey": ["hlinop.f"],
+    "drv_files": ["hlinprof.f", "hlinop.f"],
+    "drv_hbopbf": ["hbop.f", "hlinprof.f", "hlinop.f"],
 }
 DATA = {"HFILE": "stehle_long.dat", "HSELFFILE": "bpo_self.grid.DEC", "HVCSFILE": "vcsbalmer.dat"}
 
@@ -209,4 +211,20 @@ def states(calls):
 def hlckey(keys):
     """The cache index HLCKEY (16 hash slots, 12 entries): (entry, hit, number used) for each key."""
     return run("drv_hlckey", "".join("%.17g\n" % k for k in keys)).astype(int)
+
+
+def files(stehle_path, calls):
+    """HLINPROF with the Stehle table set by HLINPROF_SET_FILES (None: the DATA.FILES default).
+    calls: (nlo, nup, wave0, T, ne, nh, nhe, dop, wave).  Returns PROF (per A) and HLINPROF_SOURCE."""
+    head = ("-" if stehle_path is None else str(stehle_path)) + "\n"
+    out = run("drv_files", head + "".join("%d %d %.10f %.6e %.6e %.6e %.6e %.6e %.10f\n" % c for c in calls))
+    return out[:, 0], out[:, 1].astype(int)
+
+
+def hbop_bf(nh, nhe, ne, T, waves):
+    """HBOP_LEVELS and HBOP_BF against HBOP's continuum: (sum NLTE / NH, W(1), W(15)) and an array of
+    (CONTIN from HBOP, HBOP_BF) per wavelength."""
+    txt = "%.8e %.8e %.8e %.8e\n" % (nh, nhe, ne, T) + "".join("%.10f\n" % w for w in waves)
+    out = run("drv_hbopbf", txt)
+    return out[0], out[1:, 1:]
 
