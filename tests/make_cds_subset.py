@@ -26,6 +26,19 @@ OUT = Path(__file__).resolve().parent / "data" / "stehle_cds_subset.json"
 NUM = re.compile(r"[-+]?\d+\.\d+E[-+]\d+")
 
 
+def header_width_dop(path, T):
+    """Header HWHM including Doppler broadening ('width incl.Dop.', alpha units) at temperature T."""
+    lines = path.read_text().splitlines()
+    for i, ln in enumerate(lines):
+        if ln.startswith("T(K)"):
+            ts = [float(x) for x in NUM.findall(ln)]
+            ws = [float(x) for x in NUM.findall(lines[i + 3])]
+            for t, w in zip(ts, ws):
+                if abs(t / T - 1) < 1e-3:
+                    return w
+    raise ValueError(path)
+
+
 def stark_only(path, T):
     """Stark-only column and header HWHM ('width Stark') for temperature T."""
     lines = path.read_text().splitlines()
@@ -69,7 +82,8 @@ def main(cds):
         hw, ast, sst = stark_only(cds / d / ("%s%02d" % (d, nup)) / ("profil%d.dat" % k), T)
         out.append(dict(nlo=nlo, nup=nup, ne=h["ne"], T=ts[i], f0=h["f0"], wave0=None,
                         alpha=[float(a[j]) for j in keep], sdop=[float(s[j]) for j in keep],
-                        hwhm_stark_alpha=hw, alpha_stark=ast, sstark=sst))
+                        hwhm_stark_alpha=hw, alpha_stark=ast, sstark=sst,
+                        hwhm_dop_alpha=header_width_dop(cds / d / ("%s%02d" % (d, nup)) / ("profil%d.dat" % k), T)))
     OUT.write_text(json.dumps(out, indent=1) + "\n")
     print("wrote", OUT, len(out), "profiles")
 

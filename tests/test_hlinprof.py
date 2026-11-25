@@ -53,15 +53,15 @@ def test_hlinprof_reproduces_cds_at_table_nodes(entry):
 
 @pytest.mark.parametrize("case", HLINPROF_CASES, ids=["%d-%d_T%d_ne%.0e" % c[:4] for c in HLINPROF_CASES])
 def test_hlinprof_has_unit_area(case):
-    """Measured 0.955-1.004.  The published CDS profiles themselves integrate to 0.97-0.99 over
-    their tabulated range (direct integration of the files), so HLINPROF follows the tables; the
-    self-broadening Lorentzian added beyond 0.2 A adds up to a few per cent.  Tolerance 5%."""
+    """With the monotone cubic interpolation in STEHLE (default) the tabulated profiles integrate
+    to 1 within 2.5%; the earlier log-log linear interpolation (HLINOP_SET_CONVOLUTION(0)) gave
+    0.955-1.004, lying below the profile in Doppler-dominated cores."""
     nlo, nup, T, ne, nh = case
     for h1, he1 in ((0.0, 0.0), (nh, nh / 10.0)):
         a, tail = _area(nlo, nup, T, ne, h1, he1)
         if tail > 0.01:
             pytest.fail("integration window too narrow: far wings %.3f" % tail)
-        assert abs(a + tail - 1.0) < 0.05, (h1, a + tail)
+        assert abs(a + tail - 1.0) < 0.025, (h1, a + tail)
 
 
 @pytest.mark.parametrize("line,ne_last", [((2, 22), 1e13), ((2, 30), 10 ** 11.5), ((3, 14), 1e14)],
@@ -145,4 +145,32 @@ def test_microturbulence_is_added_to_the_tabulated_doppler_width():
     r = int(np.argmax(p < half))
     hw = np.interp(half, [p[r], p[r - 1]], [x[r], x[r - 1]])
     assert abs(hw / (np.sqrt(np.log(2.0)) * dop * w0) - 1.0) < 0.03
+
+
+@pytest.mark.parametrize("entry", CDS, ids=["%d-%d_ne%.0e_T%g" % (e["nlo"], e["nup"], e["ne"], e["T"]) for e in CDS])
+def test_hlinprof_half_width_matches_the_tables(entry):
+    """Half width of HLINPROF (thermal Doppler only, no H or He perturbers) against the half width
+    given in the CDS file header ('width incl. Dop.'): within 3% with the monotone cubic
+    interpolation (the log-log linear interpolation gave 1-6% too narrow cores)."""
+    nlo, nup, T, ne, f0 = entry["nlo"], entry["nup"], entry["T"], entry["ne"], entry["f0"]
+    w0 = H.line_centre(nlo, nup)
+    hw_ref = entry["hwhm_dop_alpha"] * f0
+    x = np.linspace(0.0, 4.0 * hw_ref, 8001)
+    p = H.hlinprof(nlo, nup, T, ne, 0.0, 0.0, H.doppler(T, vturb_kms=0.0), w0 + x, wave0=w0)
+    half = p[0] / 2
+    r = int(np.argmax(p < half))
+    hw = np.interp(half, [p[r], p[r - 1]], [x[r], x[r - 1]])
+    assert abs(hw / hw_ref - 1.0) < 0.03, hw / hw_ref
+
+
+@pytest.mark.parametrize("entry", CDS[:6], ids=["%d-%d" % (e["nlo"], e["nup"]) for e in CDS[:6]])
+def test_hlinprof_is_monotonic_between_table_nodes(entry):
+    """The monotone cubic does not overshoot: the profile falls monotonically away from the
+    centre, sampled densely across the tabulated nodes."""
+    nlo, nup, T, ne, f0 = entry["nlo"], entry["nup"], entry["T"], entry["ne"], entry["f0"]
+    w0 = H.line_centre(nlo, nup)
+    a = np.array(entry["alpha"])
+    x = np.geomspace(a[1] * f0, a[-1] * f0, 3000)
+    p = H.hlinprof(nlo, nup, T, ne, 0.0, 0.0, H.doppler(T, vturb_kms=0.0), w0 + x, wave0=w0)
+    assert np.all(np.diff(p) <= 1e-9 * p[:-1])
 
