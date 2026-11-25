@@ -1,6 +1,6 @@
 """Interfaces for synthesis codes: table files at run time (HLINPROF_SET_FILES), which profile
 HLINPROF returned (HLINPROF_SOURCE), informational messages (HLINPROF_SET_MESSAGES), and HBOP's
-populations and bound-free opacity on their own (HBOP_LEVELS, HBOP_BF)."""
+populations and bound-free opacity on their own (HBOP_LEVELS, HBOP_BF, HBOP_BF_DISSOLVED)."""
 import os
 import subprocess
 
@@ -66,6 +66,19 @@ def test_hbop_bf_equals_the_continuum_of_hbop(cond):
     np.testing.assert_array_equal(out[:, 0], out[:, 1])
     assert abs(s - 1.0) < 1e-5
     assert 0.0 < w15 < w1 <= 1.0
+
+
+@pytest.mark.parametrize("cond", HBOP_CONDITIONS, ids=[c[0] for c in HBOP_CONDITIONS])
+def test_dissolved_part_of_the_bound_free_opacity(cond):
+    """HBOP_BF_DISSOLVED counts only levels below their edge: nothing blueward of the Lyman edge,
+    the n = 2 pseudo-continuum redward of the Balmer limit (part of HBOP_BF there), and at 1.6
+    micron (levels n >= 5 still above their edges) the same with n <= 4 as with n <= 15."""
+    _, nh, nhe, ne, T = cond
+    _, out = H.hbop_bf(nh, nhe, ne, T, [900.0, 3700.0, 16000.0])
+    cont, bf, d15, d4 = out.T
+    assert d15[0] == 0.0
+    assert 0.0 < d15[1] < bf[1]
+    assert d15[2] == d4[2]
 
 
 @pytest.mark.parametrize("src", ["hlinop.f", "hlinprof.f", "hbop.f"])
