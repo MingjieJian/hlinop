@@ -3,6 +3,7 @@ C   Table of contents:
 C
 C     SUBROUTINE HLINPROF(WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,
 C    *                   H1FRC,HE1FRC,DOP,PROF)
+C     REAL*8 FUNCTION HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,...)
 C     SUBROUTINE STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
 C     SUBROUTINE HGRID(HFILE,WAVE,WAVE0,TEMP,NHYD,NLOW,NUP,HLIN)
 C     SUBROUTINE HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,WIDTH)
@@ -73,6 +74,10 @@ C
       REAL*8 DEL1,DDEL,XNEXP,F1,HLIND
       REAL*8 STARKD
       REAL*8 LOR,HWID,RES
+      REAL*8 GAML,AEXT,DOPTH,HLPCONV
+      INTEGER CONVOLUTION_MODE
+      COMMON /HLCONV/ CONVOLUTION_MODE
+      EXTERNAL HLCONVD
       REAL*8 C,PI
       CHARACTER*256 HFILE,HVCSFILE,HSELFFILE
       LOGICAL FIRST
@@ -120,6 +125,49 @@ C Precomputed things here
 C
       DEL = DABS(WAVE0 - WAVE)
       LINE = NUP - NLOW
+C
+C Nov 2026: by default (HLINOP_SET_CONVOLUTION(1)) the tabulated 
+C profile (Stark convolved with the thermal Doppler profile of H) is 
+C convolved with the remaining Doppler broadening (DOP beyond the 
+C thermal width, e.g. microturbulence; Gaussian of 1/e half width 
+C WAVE0*sqrt(DOP**2-DOPTH**2)) and with the Lorentz profile of the 
+C radiative, self (ISELF = 2 or 3) and helium widths (HLPCONV).  The
+C additions below (Lorentzian added beyond 0.2 A, no microturbulence)
+C are used with HLINOP_SET_CONVOLUTION(0), and for ISELF = 1 (self-
+C broadening grid profiles) or ICONV = 2.
+C
+      IF ((CONVOLUTION_MODE.EQ.1).AND.(ICONV.EQ.1).AND.(ISTARK.EQ.1)
+     ;    .AND.(ISELF.NE.1)) THEN
+        CALL STEHLE(HFILE,WAVE0,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
+        IF (HLIN.LT.0.) THEN
+          PROF = HLINOP(WAVE,NLOW,NUP,WAVE0,TEMP,XXNE,H1FRC,
+     ;                                          HE1FRC,DOP)
+          PROF = PROF * C/WAVE/WAVE
+          RETURN
+        ENDIF
+C  Lorentz half width (A): self + radiative + helium
+        HWID = 0.D0
+        IF (H1FRC.GT.0.) THEN
+          IF (ISELF.EQ.2) THEN
+            CALL HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,HWID)
+            HWID = HWID * WAVE0 * WAVE0 / C / 2. / PI
+          ELSE IF (ISELF.EQ.3) THEN
+            CALL ALI_GRIEM(NLOW,NUP,WAVE0,H1FRC,RES)
+            HWID = RES
+          ENDIF
+        ENDIF
+        HEWID = 0.
+        IF (IHE .EQ. 1 ) CALL HE_PDWIDTH(NLOW,NUP,TEMP,HE1FRC,HEWID)
+        RAD = 0.
+        CALL RAD_WIDTH(NLOW,NUP,RAD)
+        GAML = HWID + (RAD + HEWID) * WAVE0 * WAVE0 / C / 2. / PI
+C  Doppler broadening beyond the thermal width of H in the tables
+        DOPTH = SQRT(2.D0*1.380649D-16*TEMP/1.6735575D-24)/2.99792458D10
+        AEXT = 0.D0
+        IF (DOP.GT.DOPTH) AEXT = WAVE0*SQRT(DBLE(DOP)**2-DOPTH**2)
+        PROF = HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,AEXT,GAML)
+        RETURN
+      ENDIF
 C
 C Adding for convolution of Stark and self
 C
@@ -267,6 +315,164 @@ C
       PROF = HLIN
       RETURN
 C
+      END
+
+      REAL*8 FUNCTION HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,
+     *                        AEXT,GAML)
+C
+C  Tabulated profile (STEHLE, per A) convolved with a Gaussian of 1/e 
+C  half width AEXT (A) and a Lorentzian of half width GAML (A).  The 
+C  Gaussian and Lorentzian enter through their analytic Fourier 
+C  transforms; the tabulated profile is sampled on a uniform grid and
+C  scaled to its own area within the grid (log-grid quadrature; the 
+C  tables are not renormalised to 1).  Done once per (NLOW, NUP, WAVE0,
+C  TEMP, XXNE, AEXT, GAML) and cached (NSLOT states) on a logarithmic
+C  grid for |dlambda| <= RC (40 widths, at most 0.15 WAVE0); beyond RC 
+C  the tabulated profile and the Lorentzian are added.
+C
+      IMPLICIT NONE
+      CHARACTER HFILE*(*)
+      INTEGER NLOW,NUP
+      REAL*8 WAVE,WAVE0,AEXT,GAML
+      REAL TEMP,XXNE
+      INTEGER NSLOT,NOUT,NMAXG,NFFT,NLG
+      PARAMETER (NSLOT=128, NOUT=1200, NMAXG=8191, NFFT=32768, NLG=600)
+      REAL*8 PI
+      PARAMETER (PI=3.14159265358979D0)
+      INTEGER KN(NSLOT),KM(NSLOT),NEXT,IS,I,K,NG,NH,NF
+      REAL*8 KW(NSLOT),KT(NSLOT),KNE(NSLOT),KA(NSLOT),KG(NSLOT)
+      REAL*8 RCS(NSLOT),XO(NOUT,NSLOT),YB(NOUT,NSLOT),YR(NOUT,NSLOT)
+      REAL*8 Y0(NSLOT),CV(NMAXG)
+      COMPLEX*16 FA(NFFT)
+      REAL P0,PV,PV2
+      REAL*8 WT,W,WMIN,RC,G,H,X,AK,SUMS,AREA,XMIN,X1,X2,R,WW,YL,YH,PHI
+      REAL*8 AD,D
+      SAVE
+      DATA KN/NSLOT*0/, KM/NSLOT*0/, NEXT/1/
+C
+      DO 10 IS = 1, NSLOT
+        IF ((KN(IS).EQ.NLOW).AND.(KM(IS).EQ.NUP).AND.(KW(IS).EQ.WAVE0)
+     *      .AND.(KT(IS).EQ.DBLE(TEMP)).AND.(KNE(IS).EQ.DBLE(XXNE))
+     *      .AND.(KA(IS).EQ.AEXT).AND.(KG(IS).EQ.GAML)) GOTO 50
+   10 CONTINUE
+C
+C  Build.  Width of the tabulated profile from its peak.
+C
+      IS = NEXT
+      NEXT = MOD(NEXT,NSLOT) + 1
+      CALL STEHLE(HFILE,WAVE0,WAVE0,TEMP,XXNE,NLOW,NUP,P0)
+      WT = 0.5D0/DBLE(P0)
+      W = MAX(WT,AEXT,GAML)
+      WMIN = WT
+      IF (AEXT.GT.0.D0) WMIN = MIN(WMIN,AEXT)
+      IF (GAML.GT.0.D0) WMIN = MIN(WMIN,GAML)
+      RC = MIN(40.D0*W, 0.15D0*WAVE0)
+      G = 2.D0*RC
+      H = WMIN/8.D0
+C  (compare in floating point: G/H can exceed the integer range when a
+C  component is extremely narrow)
+      IF (G/H.GT.DBLE((NMAXG-1)/2)) THEN
+        NH = (NMAXG-1)/2
+        H = G/DBLE(NH)
+      ELSE
+        NH = INT(G/H)
+      ENDIF
+      NG = 2*NH + 1
+      NF = 1
+   15 NF = 2*NF
+      IF (NF.LT.4*NG) GOTO 15
+      IF (NF.GT.NFFT) STOP 'HLPCONV: NFFT too small'
+      DO 20 I = 1, NF
+        FA(I) = (0.D0,0.D0)
+   20 CONTINUE
+      SUMS = 0.D0
+      DO 21 I = 1, NG
+        X = DBLE(I-NH-1)*H
+        CALL STEHLE(HFILE,WAVE0+X,WAVE0,TEMP,XXNE,NLOW,NUP,PV)
+        FA(I) = DCMPLX(DBLE(MAX(PV,0.)),0.D0)
+        SUMS = SUMS + DBLE(FA(I))
+   21 CONTINUE
+      SUMS = SUMS*H
+C  area of the tabulated profile within +-G (log grid, both sides)
+      XMIN = MIN(1.D-4, H/4.D0)
+      AREA = 2.D0*DBLE(P0)*XMIN
+      DO 22 K = 1, NLG-1
+        X1 = XMIN*(G/XMIN)**(DBLE(K-1)/DBLE(NLG-1))
+        X2 = XMIN*(G/XMIN)**(DBLE(K)/DBLE(NLG-1))
+        CALL STEHLE(HFILE,WAVE0+X1,WAVE0,TEMP,XXNE,NLOW,NUP,PV)
+        CALL STEHLE(HFILE,WAVE0+X2,WAVE0,TEMP,XXNE,NLOW,NUP,PV2)
+        AREA = AREA + 0.5D0*(DBLE(PV)+DBLE(PV2))*(X2-X1)
+        CALL STEHLE(HFILE,WAVE0-X1,WAVE0,TEMP,XXNE,NLOW,NUP,PV)
+        CALL STEHLE(HFILE,WAVE0-X2,WAVE0,TEMP,XXNE,NLOW,NUP,PV2)
+        AREA = AREA + 0.5D0*(DBLE(PV)+DBLE(PV2))*(X2-X1)
+   22 CONTINUE
+      IF (SUMS.GT.0.D0) THEN
+        DO 23 I = 1, NG
+          FA(I) = FA(I)*AREA/SUMS
+   23   CONTINUE
+      ENDIF
+      CALL HLFFT(FA,NF,1)
+      DO 25 I = 1, NF
+        K = I - 1
+        IF (K.GE.NF/2) K = K - NF
+        AK = DBLE(K)/(DBLE(NF)*H)
+        FA(I) = FA(I)*EXP(-(PI*AEXT*AK)**2 - 2.D0*PI*GAML*ABS(AK))
+   25 CONTINUE
+      CALL HLFFT(FA,NF,-1)
+      DO 30 I = 1, NG
+        CV(I) = MAX(DBLE(FA(I))/DBLE(NF), 0.D0)
+   30 CONTINUE
+C  store on a log grid of |dlambda|; YR: dlambda > 0, YB: dlambda < 0
+      Y0(IS) = CV(NH+1)
+      DO 40 K = 1, NOUT
+        XO(K,IS) = H*(RC/H)**(DBLE(K-1)/DBLE(NOUT-1))
+        R = XO(K,IS)/H
+        I = INT(R)
+        WW = R - DBLE(I)
+        YR(K,IS) = LOG(MAX((1.D0-WW)*CV(NH+1+I)+WW*CV(NH+2+I),1.D-300))
+        YB(K,IS) = LOG(MAX((1.D0-WW)*CV(NH+1-I)+WW*CV(NH-I),1.D-300))
+   40 CONTINUE
+      KN(IS) = NLOW
+      KM(IS) = NUP
+      KW(IS) = WAVE0
+      KT(IS) = DBLE(TEMP)
+      KNE(IS) = DBLE(XXNE)
+      KA(IS) = AEXT
+      KG(IS) = GAML
+      RCS(IS) = RC
+C
+C  Evaluate
+C
+   50 D = WAVE - WAVE0
+      AD = ABS(D)
+      IF (AD.LE.RCS(IS)) THEN
+        IF (AD.LT.XO(1,IS)) THEN
+          IF (D.GE.0.D0) THEN
+            YH = EXP(YR(1,IS))
+          ELSE
+            YH = EXP(YB(1,IS))
+          ENDIF
+          PHI = Y0(IS) + (YH-Y0(IS))*AD/XO(1,IS)
+        ELSE
+          R = 1.D0 + DBLE(NOUT-1)*LOG(AD/XO(1,IS))/
+     *        LOG(XO(NOUT,IS)/XO(1,IS))
+          K = MIN(INT(R),NOUT-1)
+          WW = (LOG(AD)-LOG(XO(K,IS)))/(LOG(XO(K+1,IS))-LOG(XO(K,IS)))
+          IF (D.GE.0.D0) THEN
+            YL = YR(K,IS)
+            YH = YR(K+1,IS)
+          ELSE
+            YL = YB(K,IS)
+            YH = YB(K+1,IS)
+          ENDIF
+          PHI = EXP((1.D0-WW)*YL + WW*YH)
+        ENDIF
+        HLPCONV = PHI
+      ELSE
+        CALL STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,PV)
+        HLPCONV = DBLE(PV) + GAML/PI/(GAML*GAML+D*D)
+      ENDIF
+      RETURN
       END
 
       SUBROUTINE STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)

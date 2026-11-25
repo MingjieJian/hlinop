@@ -32,8 +32,10 @@ def _area(nlo, nup, T, ne, h1, he1, rel=0.1):
 @pytest.mark.parametrize("entry", CDS, ids=["%d-%d_ne%.0e_T%g" % (e["nlo"], e["nup"], e["ne"], e["T"]) for e in CDS])
 def test_hlinprof_reproduces_cds_at_table_nodes(entry):
     """At a tabulated temperature and density HLINPROF returns the CDS profile, S(alpha)/F0 with
-    delta lambda = alpha * F0 (no self or helium broadening; points where the added radiative
-    Lorentzian could matter at the 1e-4 level are skipped)."""
+    delta lambda = alpha * F0.  Exact (2e-4) without the convolutions (HLINOP_SET_CONVOLUTION(0);
+    points where the added radiative Lorentzian could matter at the 1e-4 level are skipped).
+    With the convolutions and the thermal Doppler width only, within 1%: the convolution on a
+    grid rounds off the kinks of the piecewise log-log interpolation at the table nodes."""
     nlo, nup, T, ne, f0 = entry["nlo"], entry["nup"], entry["T"], entry["ne"], entry["f0"]
     w0 = H.line_centre(nlo, nup)
     a = np.array(entry["alpha"])
@@ -41,8 +43,11 @@ def test_hlinprof_reproduces_cds_at_table_nodes(entry):
     dl = a * f0
     lor = 1e9 * w0 ** 2 / C_A / (2 * np.pi)                 # upper bound of the radiative half width (A)
     use = (dl <= 0.2) | (lor / (np.pi * np.maximum(dl, 1e-30) ** 2) < 1e-4 * ref)
-    got = H.hlinprof(nlo, nup, T, ne, 0.0, 0.0, H.doppler(T), w0 + dl[use], wave0=w0)
+    dop = H.doppler(T, vturb_kms=0.0)
+    got = H.hlinprof(nlo, nup, T, ne, 0.0, 0.0, dop, w0 + dl[use], wave0=w0, convolution=0)
     np.testing.assert_allclose(got, ref[use], rtol=2e-4)
+    got = H.hlinprof(nlo, nup, T, ne, 0.0, 0.0, dop, w0 + dl[use], wave0=w0)
+    np.testing.assert_allclose(got, ref[use], rtol=1e-2)
     assert use.sum() >= 5
 
 
@@ -110,3 +115,34 @@ def test_hlinop_is_used_where_there_is_no_table(line, T, ne):
     got = H.hlinprof(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0)
     _, q = H.profile(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0)
     np.testing.assert_allclose(got, q * C_A / w ** 2, rtol=1e-5)
+
+
+def test_lorentz_broadening_does_not_add_area():
+    """The self, helium and radiative widths are convolved with the tabulated profile: with
+    n_HI = 1e17 the area is that of the table alone (the earlier addition beyond 0.2 A added 4%
+    for H gamma here)."""
+    nlo, nup, T, ne = 2, 5, 6300.0, 1e14
+    a0, t0 = _area(nlo, nup, T, ne, 0.0, 0.0)
+    a1, t1 = _area(nlo, nup, T, ne, 1e17, 1e16)
+    assert abs((a1 + t1) / (a0 + t0) - 1.0) < 0.005
+
+
+def test_microturbulence_is_added_to_the_tabulated_doppler_width():
+    """The tables contain the thermal Doppler profile of H; a Doppler width DOP above it adds a
+    Gaussian of 1/e half width lambda0 * sqrt(DOP^2 - DOP_thermal^2).  DOP at or below the
+    thermal width adds nothing; a large DOP (30 km/s) sets the core width of a Doppler-dominated
+    line (H alpha at 1e10 cm^-3) to within 3%."""
+    nlo, nup, T, ne = 2, 3, 5000.0, 1e10
+    w0 = H.line_centre(nlo, nup)
+    dth = H.doppler(T, vturb_kms=0.0)
+    x = np.linspace(0.0, 5.0, 5001)
+    a = H.hlinprof(nlo, nup, T, ne, 0.0, 0.0, dth, w0 + x, wave0=w0)
+    b = H.hlinprof(nlo, nup, T, ne, 0.0, 0.0, 0.5 * dth, w0 + x, wave0=w0)
+    np.testing.assert_allclose(a, b, rtol=1e-4)     # DOP is single precision: "equal" may add ~1e-4
+    dop = H.doppler(T, vturb_kms=30.0)
+    p = H.hlinprof(nlo, nup, T, ne, 0.0, 0.0, dop, w0 + x, wave0=w0)
+    half = p[0] / 2
+    r = int(np.argmax(p < half))
+    hw = np.interp(half, [p[r], p[r - 1]], [x[r], x[r - 1]])
+    assert abs(hw / (np.sqrt(np.log(2.0)) * dop * w0) - 1.0) < 0.03
+
