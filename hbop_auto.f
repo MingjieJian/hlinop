@@ -41,7 +41,7 @@ C  Paul Barklem, December 2024
 C
       IMPLICIT NONE
       INTEGER I, J, NMAX, NBF, NMAXMAX, NLOW, NLO(NMAX), NUP(NMAX), N
-      PARAMETER (NBF = 6, NMAXMAX = 100)
+      PARAMETER (NBF = 15, NMAXMAX = 100)
       REAL NH, NHE, NE, T, CONTIN, TOTAL, DOP
       REAL*8 WAVE, WAVEH(NMAX), VACAIR 
       REAL*8 EHYD(NMAXMAX), WCONTH(NMAXMAX), WLINEH(NMAXMAX,NMAXMAX)
@@ -91,7 +91,7 @@ C
       IF (WAVE.GT.WCONTH(I)) NLOW = I
  5    CONTINUE
       IF (NLOW.EQ.NBF) THEN
-        STOP 'HBOP_AUTO: NLOW exceeds NBF' 
+        STOP 'HBOP_AUTO: WAVE beyond the n=15 bf edge (20.5 micron)'
       ENDIF
 C
 C  Extract the lines

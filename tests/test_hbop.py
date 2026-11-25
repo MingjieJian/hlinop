@@ -103,3 +103,12 @@ def test_hbop_is_finite_in_the_infrared():
     lines = [(2, m, H.line_centre(2, m)) for m in range(3, 31)]
     tot, cont = H.hbop(nh, nhe, ne, T, H.doppler(T), lines, [40000.0, 60000.0, 80000.0, 120000.0])
     assert np.all(np.isfinite(tot)) and np.all(np.isfinite(cont)) and np.all(cont > 0)
+
+
+def test_hbop_auto_reaches_20_micron():
+    """With NBF = 15 HBOP_AUTO works up to the n = 15 bound-free edge (20.5 micron; it stopped
+    at the n = 6 edge, 3.28 micron, before) and stops beyond it with a message."""
+    total, cont, _ = H.hbop_auto(60, 1e16, 1e15, 1e13, 6000.0, H.doppler(6000.0), [40000.0, 150000.0, 200000.0])
+    assert len(total) == 3 and np.all(cont > 0) and np.all(total >= cont)
+    total, cont, msg = H.hbop_auto(60, 1e16, 1e15, 1e13, 6000.0, H.doppler(6000.0), [210000.0])
+    assert len(total) == 0 and "20.5 micron" in msg

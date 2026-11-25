@@ -116,7 +116,8 @@ C  nlevels = number of levels summed in partition functions and computed
 C            populations and occupation probabilities. Must be larger or 
 C            equal to the highest level in the line list and NL.
 C  nbf     = highest level for which the bound-free component is 
-C            accounted for (limited to 15 at present). 
+C            accounted for (at most 15: HBF has Gaunt factors for
+C            n = 1-15; it was 6 before Nov 2026).
 C
 C  The neutral-perturber (excluded-volume) part of the occupation 
 C  probability is off by default; see HBOP_SET_EXCLUDED_VOLUME.
@@ -131,6 +132,7 @@ C  Nov 2026, dissolved fraction from the code's own level energies
 C            in vacuum wavelengths (HBNSTAR)
 C  Nov 2026, levels whose red-wing taper has underflowed are skipped
 C            (Inf/NaN beyond about 5 micron)
+C  Nov 2026, NBF = 15 (was 6)
 C  Nov 2026, line profiles from HLINPROF (Stehle & Hutcheon tables for
 C            Lyman beta and up, Balmer and Paschen to n_up = 30; HLINOP
 C            otherwise) with the HLINOP cutoffs; HBOP_SET_LINE_PROFILE
@@ -138,7 +140,7 @@ C
       IMPLICIT NONE
       INTEGER N, NLO(*), NUP(*), NLEVELS, I, J, NBF, NL, FF,FN
       PARAMETER (NLEVELS = 100)  
-      PARAMETER (NBF = 6)  
+      PARAMETER (NBF = 15)
       REAL NH, NHE, NE, T, CONTIN, DOP, TOTAL
       REAL NHL, NHEL, NEL, TL
       REAL*8 W(NLEVELS), G(NLEVELS), WGE(NLEVELS)
