@@ -23,19 +23,19 @@ IONH_CM = 109678.764        # H ionisation energy in cm^-1, as in hlinop.f/hbop.
 
 # which Fortran sources each driver needs
 PROGRAMS = {
-    "drv_wcalc": ["hbop.f", "hlinop.f"],
+    "drv_wcalc": ["hbop.f", "hlinprof.f", "hlinop.f"],
     "drv_profile": ["hlinop.f"],
-    "drv_hbop": ["hbop.f", "hlinop.f"],
-    "drv_hbf": ["hbop.f", "hlinop.f"],
+    "drv_hbop": ["hbop.f", "hlinprof.f", "hlinop.f"],
+    "drv_hbf": ["hbop.f", "hlinprof.f", "hlinop.f"],
     "drv_hlinprof": ["hlinprof.f", "hlinop.f"],
 }
-DATA = {"HFILE": "stehle.dat.DEC", "HSELFFILE": "bpo_self.grid.DEC", "HVCSFILE": "vcsbalmer.dat"}
+DATA = {"HFILE": "stehle_long.dat", "HSELFFILE": "bpo_self.grid.DEC", "HVCSFILE": "vcsbalmer.dat"}
 
 
 @lru_cache(maxsize=None)
 def build_dir():
     """Directory with the compiled drivers.  hlinprof.f reads its table file names from an
-    INCLUDE file of CHARACTER*80 parameters, so the data files are linked into a short path."""
+    INCLUDE file of fixed-form PARAMETER lines, so the data files are linked into a short path."""
     if os.environ.get("HLINOP_TEST_BUILD"):
         d = Path(os.environ["HLINOP_TEST_BUILD"])
     else:  # short path under /tmp, removed at exit
@@ -47,8 +47,8 @@ def build_dir():
         dst = d / name
         if not dst.exists():
             os.symlink(ROOT / name, dst)
-        if len(str(dst)) > 78:
-            raise RuntimeError(f"data path too long for CHARACTER*80: {dst}")
+        if len(str(dst)) > 120:
+            raise RuntimeError(f"data path too long for a fixed-form PARAMETER line: {dst}")
         lines += [f"      PARAMETER ({key}=", f"     ;'{dst}')"]
     (d / "DATA.FILES").write_text("\n".join(lines) + "\n")
     for prog, srcs in PROGRAMS.items():
@@ -109,11 +109,13 @@ def detuning_grid(wave0, rel_max=0.15, dmin=1e-4, npts=3000):
     return np.concatenate([wave0 - d[::-1], [wave0], wave0 + d])
 
 
-def profile(nlo, nup, T, ne, nh, nhe, dop, waves, wave0=None):
-    """HPROFL and HLINOP (per Hz) at the given wavelengths."""
+def profile(nlo, nup, T, ne, nh, nhe, dop, waves, wave0=None, with_cut=False):
+    """HPROFL and HLINOP (per Hz) at the given wavelengths (and the HLCUT weight)."""
     wave0 = line_centre(nlo, nup) if wave0 is None else wave0
     head = "%d %d %.10f %.6e %.6e %.6e %.6e %.6e\n" % (nlo, nup, wave0, T, ne, nh, nhe, dop)
     out = run("drv_profile", head + "".join("%.10f\n" % w for w in waves))
+    if with_cut:
+        return out[:, 1], out[:, 2], out[:, 3]
     return out[:, 1], out[:, 2]
 
 
@@ -144,15 +146,22 @@ def area_per_angstrom(waves, phi_lam):
     return float(np.trapezoid(p, w) if hasattr(np, "trapezoid") else np.trapz(p, w))
 
 
-def hbop(nh, nhe, ne, T, dop, lines, waves, scale=None):
+def hbop(nh, nhe, ne, T, dop, lines, waves, scale=None, profile=None):
     """HBOP total and continuous opacity (cm^-1); lines: iterable of (nlo, nup, waveh).
-    scale: None (never call HBOP_SET_EXCLUDED_VOLUME), a number, or one number per wavelength
-    (all calls run in one process, in order)."""
+    scale: excluded-volume scale (HBOP_SET_EXCLUDED_VOLUME); profile: line-profile mode
+    (HBOP_SET_LINE_PROFILE).  Each is None (never set: the code's default), a number, or one
+    number per wavelength (all calls run in one process, in order)."""
     lines = list(lines)
     waves = list(waves)
-    if scale is None or np.isscalar(scale):
-        scale = [-1.0 if scale is None else float(scale)] * len(waves)
+
+    def per_wave(x, default):
+        if x is None or np.isscalar(x):
+            return [default if x is None else x] * len(waves)
+        return list(x)
+    sc = per_wave(scale, -1.0)
+    md = per_wave(profile, -1)
     head = "%.6e %.6e %.6e %.6e %.6e %d\n" % (nh, nhe, ne, T, dop, len(lines))
     head += "".join("%d %d %.10f\n" % l for l in lines)
-    out = run("drv_hbop", head + "".join("%.10f %.8e\n" % (w, s) for w, s in zip(waves, scale)))
+    out = run("drv_hbop", head + "".join("%.10f %.8e %d\n" % (w, float(s), int(m))
+                                         for w, s, m in zip(waves, sc, md)))
     return out[:, 1], out[:, 2]

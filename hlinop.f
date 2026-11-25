@@ -15,6 +15,7 @@ C  Table of Contents:
 C  ------------------
 C 
 C  REAL FUNCTION HLINOP(WAVE,NBLO,NBUP,WAVEH,T,XNE,H1FRC,HE1FRC,DOPPLE)
+C  REAL FUNCTION HLCUT(WAVE,NBLO,NBUP,WAVEH)
 C  REAL FUNCTION HPROFL(N,M,WAVE,WAVEH,T,XNE,H1FRC,HE1FRC,DOPPH)
 C  REAL FUNCTION STARK1(N,M,WAVE,WAVEH,T,XNE)
 C  REAL FUNCTION HFNM(N,M)
@@ -186,6 +187,60 @@ C
            ENDIF
         END IF
 C
+      RETURN
+      END
+
+C***********************************************************************
+      REAL FUNCTION HLCUT(WAVE,NBLO,NBUP,WAVEH)
+C
+C  Weight (0, 1, or the red-wing taper) that HLINOP applies to HPROFL
+C  at WAVE: blue cut at the series limit, red cut WCUT for the series
+C  (with an exponential taper for alpha lines).  Lets callers apply 
+C  the same cutoffs to profiles from other sources (e.g. HLINPROF in
+C  HBOP).  Must follow HLINOP with CUTNEXT = .FALSE. and 
+C  REFLECT = .FALSE. (the defaults there).
+C
+      REAL*8 WAVEH,WAVE,WCON,REDCUT,BLUECUT
+      REAL*8 EHYD(100),CONTH(100),WCUT(100)
+      REAL*8 VACAIR
+      LOGICAL FIRST
+      SAVE
+      DATA FIRST/.TRUE./
+      IF (FIRST) THEN
+        EHYD(1) =      0.000D0
+        EHYD(2) =  82259.105D0
+        EHYD(3) =  97492.302D0
+        EHYD(4) = 102823.893D0
+        EHYD(5) = 105291.651D0
+        EHYD(6) = 106632.160D0
+        EHYD(7) = 107440.444D0
+        EHYD(8) = 107965.051D0
+        DO 1 I = 9, 100
+ 1      EHYD(I) = 109678.764D0 - 109677.576D0/I**2
+        DO 2 I = 1, 100
+ 2      CONTH(I) = 109678.764D0 - EHYD(I)
+        WCUT(1) = 3647.D0
+        WCUT(2) = 8650.D0
+        DO 3 I = 3, 98
+ 3      WCUT(I) = 1.D8/((EHYD(I+1)-EHYD(I))-(EHYD(I+2)-EHYD(I+1)))
+        FIRST = .FALSE.
+      END IF
+      HLCUT = 1.
+      IF (WAVE.GE.WAVEH) THEN
+         REDCUT = WCUT(NBLO)
+         IF (NBLO.NE.1) REDCUT = VACAIR(REDCUT)
+         IF (WAVE.GT.REDCUT) THEN
+            IF (NBUP-NBLO.EQ.1) THEN
+               HLCUT = DEXP((REDCUT-WAVE)*1.D-2)
+            ELSE
+               HLCUT = 0.
+            ENDIF
+         ENDIF
+      ELSE
+         BLUECUT = 1.D8/CONTH(NBLO)
+         IF (NBLO.NE.1) BLUECUT = VACAIR(BLUECUT)
+         IF (WAVE.LT.BLUECUT) HLCUT = 0.
+      END IF
       RETURN
       END
 

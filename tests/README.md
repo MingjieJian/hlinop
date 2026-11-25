@@ -25,13 +25,15 @@ GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux fo
    - `HBOP` recomputes its cached populations when the excluded-volume setting changes;
    - `w` → 1 without perturbers, and `w` falls with n;
    - the continuum is smooth across the Balmer limit;
-   - `HLINOP` equals `HPROFL` inside its cut-offs.
+   - `HLINOP` equals `HPROFL` × `HLCUT` (the cutoff weight that HBOP applies to tabulated profiles);
+   - `HLINPROF` returns the CDS profiles at table nodes (`data/stehle_cds_subset.json`, from `make_cds_subset.py`), has unit area within the tables' own normalisation, scales quasistatically above a line's last density, and returns HLINOP where there is no table;
+   - `HBOP` uses the tabulated profiles by default and cuts them at the series limit.
 
    A physics test that the current code fails is marked `known_issue` and `xfail` with the reason. `xfail_strict` is on, so once a fix lands the test reports XPASS and fails. The `xfail` mark must then be removed in the same change. The suite therefore records which problems are known and when each one was fixed.
 
-2. **Stable snapshots** (`test_regression.py`, kind `stable`): `HBF`, `HLINPROF` for Hα–Hγ, and `WCALC` by default and with the Hummer & Mihalas excluded volume. These are change detectors for parts that no planned change should alter. They do not certify the numbers.
+2. **Stable snapshots** (`test_regression.py`, kind `stable`): `HBF`, `HLINPROF` for tabulated lines, and `WCALC` by default and with the Hummer & Mihalas excluded volume. These are change detectors for parts that no planned change should alter. They do not certify the numbers.
 
-3. **Legacy snapshots** (marker `legacy`): `HPROFL`/`HLINOP` Stark profiles and the `HBOP` opacities that use them, with the default setting and with `HBOP_SET_EXCLUDED_VOLUME(1.0)`. These are parts that planned changes will alter on purpose. A change that alters them regenerates the snapshot in the same commit and says why:
+3. **Legacy snapshots** (marker `legacy`): `HPROFL`/`HLINOP` Stark profiles and the `HBOP` opacities that use them: `hbop` (defaults), `hbop_hlinop_profiles` (`HBOP_SET_LINE_PROFILE(0)`) and `hbop_original` (HLINOP profiles and the Hummer & Mihalas excluded volume, i.e. the code before Nov 2026; equal bit for bit to the snapshots taken before the changes). These are parts that planned changes will alter on purpose. A change that alters them regenerates the snapshot in the same commit and says why:
 
    ```
    python tests/snapshots.py
@@ -51,10 +53,9 @@ GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux fo
 2. **`NBF` disagrees with the header.** `NBF = 6`, so bound–free absorption from n ≥ 7 is omitted, while the header says the limit is 15.
 3. **`STARK1` cache key.** `STARK1` caches `C1CON`/`C2CON`, which depend on `WAVEH`, keyed on (N, M) only. A call with the same (N, M) and a different line centre reuses stale values. SMElib added `WAVEH` to the key.
 4. **Undefined variable in `STARK1`.** `STARK1` computes `T3NHE` from `HE1FRC`, which is not one of its arguments; the value is never used.
-5. **Self-broadening density.** `HBOP` passes `NP(1)`, the ground-state population, as the H I density used for self-broadening, instead of the total `NH`.
+5. **Self-broadening density.** `HBOP` passes `NP(1)`, the ground-state population, as the H I density used for self-broadening, instead of the total `NH` (equal to < 0.1% in FGK photospheres).
 6. **`HLINPROF` adds area.** The self-broadening Lorentzian is added (not convolved) beyond 0.2 Å from the centre. This adds up to 4% to the area (Hγ, n_HI = 1e17). The test tolerance is 5%.
-7. **`HLINPROF` table coverage.** The Stehle table in this repository (`stehle.dat.*`) has six lines: Lyα–Lyγ and Hα–Hγ. It has 3 temperatures (2500, 5000, 10000 K) and log n_e 10–16 in steps of 0.5.
-   - `HLINPROF` uses the table only for n_lo = 2, n_up ≤ 5. The Lyman profiles in the table are never used; Lyman lines go to `HLINOP`.
-   - Outside the grid it falls back to VCS (`vcsbalmer.dat`); this path is tested.
-   - Interpolation in log T over only three points has not been checked against the original tables.
+7. **The published Stehle tables are not quite normalised.** Integrating the CDS profiles directly over their tabulated range gives 0.97–0.99 (Hβ, H10, Pa14, Lyβ at 1e14 cm⁻³), and HLINPROF reproduces this. The `HLINPROF` area tolerance is 5%.
+   - Tabulated profiles contain thermal Doppler broadening only; the Doppler width passed in (with microturbulence) is used only for lines that go to HLINOP.
+   - Lyman alpha is left to HLINOP on purpose (its far-wing satellites); to be revisited.
 8. **`hlinprof.f` does not compile on its own.** It needs a `DATA.FILES` include that only `SYNTH/Makefile` generates. The tests generate it themselves.

@@ -42,3 +42,35 @@ def test_changing_the_excluded_volume_recomputes_the_populations():
         t1, c1 = H.hbop(nh, nhe, ne, T, H.doppler(T), lines, [w], scale=s)
         np.testing.assert_allclose([tot[i], cont[i]], [t1[0], c1[0]], rtol=1e-6)
     assert abs(tot[0] / tot[1] - 1.0) > 0.05  # the setting matters here (17% at 3700 A)
+
+
+def _line_opacity(nlo, nup, waves, profile, cond=HBOP_CONDITIONS[0]):
+    _, nh, nhe, ne, T = cond
+    tot, cont = H.hbop(nh, nhe, ne, T, H.doppler(T), [(nlo, nup, H.line_centre(nlo, nup))], waves,
+                       profile=profile)
+    return tot - cont
+
+
+@pytest.mark.parametrize("line", [(2, 10), (2, 22), (3, 14), (1, 3)], ids=lambda l: "%d-%d" % l)
+def test_hbop_uses_the_tabulated_profiles(line):
+    """By default the line opacity of a tabulated line follows HLINPROF (per A, converted to per
+    Hz); HBOP_SET_LINE_PROFILE(0) follows HLINOP.  Their ratio equals the profile ratio."""
+    nlo, nup = line
+    _, nh, nhe, ne, T = HBOP_CONDITIONS[0]
+    w0 = H.line_centre(nlo, nup)
+    w = w0 + np.array([0.0, 0.5, 2.0, -2.0])
+    l1 = _line_opacity(nlo, nup, w, None)
+    l0 = _line_opacity(nlo, nup, w, 0)
+    # HBOP passes the ground-state population NP(1) as the H I density for the broadening by
+    # hydrogen; at these conditions NP(1) = NH to < 0.1%
+    prof_tab = H.hlinprof(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0) * w ** 2 / H.C_ANGSTROM
+    _, prof_hlinop = H.profile(nlo, nup, T, ne, nh, nhe, H.doppler(T), w, wave0=w0)
+    np.testing.assert_allclose(l1 / l0, prof_tab / prof_hlinop, rtol=2e-3)
+
+
+def test_tabulated_lines_are_cut_at_the_series_limit():
+    """Like HLINOP, the tabulated profiles in HBOP stop at the series limit: no line opacity of
+    a Balmer line blueward of 3646 A (air)."""
+    w = np.array([3600.0, 3620.0, 3640.0])
+    np.testing.assert_array_equal(_line_opacity(2, 10, w, None), 0.0)
+    assert np.all(_line_opacity(2, 10, np.array([3700.0, 3790.0]), None) > 0)

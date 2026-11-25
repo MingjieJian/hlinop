@@ -25,13 +25,18 @@ C
 C  REAL HBOP(WAVE,N,NLO,NUP,WAVEH,NH,NHE,NE,T,DOP,NPOP,NL,TOTAL,CONTIN)   
 C  REAL FUNCTION WCALC(NH, NE, NHW, NS, TEMP)	
 C  SUBROUTINE HBOP_SET_EXCLUDED_VOLUME(SCALE)
+C  SUBROUTINE HBOP_SET_LINE_PROFILE(MODE)
 C  BLOCK DATA HBOPEVD
 C  REAL FUNCTION HBF(WAVE,NLO)
 C  SUBROUTINE LOGINT(X,Y,N,XI,YI)
 C  SUBROUTINE POLINT(XA,YA,N,X,Y,DY)
 C
+C  NEEDS HLINPROF (hlinprof.f, with its table files) for the line 
+C  profiles by default; HBOP_SET_LINE_PROFILE(0) uses HLINOP only.
+C
 C  NEEDS HLINOP which contains
 C  REAL FUNCTION HLINOP(WAVE,NBLO,NBUP,WAVEH,T,XNE,H1FRC,HE1FRC,DOPPLE)
+C  REAL FUNCTION HLCUT(WAVE,NBLO,NBUP,WAVEH)
 C  REAL FUNCTION HPROFL(N,M,WAVE,WAVEH,T,XNE,H1FRC,HE1FRC,DOPPH)
 C  REAL FUNCTION STARK1(N,M,WAVE,WAVEH,T,XNE)
 C  REAL FUNCTION HFNM(N,M)
@@ -46,6 +51,8 @@ C
 C  HBOP  : NLEVELS, NBF
 C  WCALC : neutral-perturber excluded volume, set at run time with
 C          CALL HBOP_SET_EXCLUDED_VOLUME(SCALE); default 0 (off)
+C  HBOP  : line profiles, set at run time with
+C          CALL HBOP_SET_LINE_PROFILE(MODE); default 1 (HLINPROF)
 C  HLINOP: CUTNEXT, REFLECT
 C  HPROFL: RAYLCUT
 C
@@ -117,6 +124,9 @@ C  Paul Barklem, Uppsala, August 2003
 C  Dec 2024, error catch for NUP > NLEVELS added
 C  Nov 2026, excluded-volume switch (HBOP_SET_EXCLUDED_VOLUME); the 
 C            populations are recomputed when the setting changes
+C  Nov 2026, line profiles from HLINPROF (Stehle & Hutcheon tables for
+C            Lyman beta and up, Balmer and Paschen to n_up = 30; HLINOP
+C            otherwise) with the HLINOP cutoffs; HBOP_SET_LINE_PROFILE
 C
       IMPLICIT NONE
       INTEGER N, NLO(*), NUP(*), NLEVELS, I, J, NBF, NL, FF,FN
@@ -134,7 +144,12 @@ C
       LOGICAL FIRST
       REAL EXCLUDED_VOLUME_SCALE, EVSL
       COMMON /HBOPEV/ EXCLUDED_VOLUME_SCALE
+      INTEGER LINE_PROFILE_MODE
+      COMMON /HBOPLP/ LINE_PROFILE_MODE
       EXTERNAL HBOPEVD
+      REAL PROF, HLCUT, WCUTF
+      REAL*8 CAA
+      PARAMETER (CAA=2.99792458D18)   ! speed of light in A/s
       SAVE 
       DATA FIRST/.TRUE./, EVSL/-1./
       PARAMETER (H=6.62607E-27, C=2.9979E10, K=1.38065E-16)
@@ -204,8 +219,22 @@ C
       LINE = 0.
       DO 30 I = 1, N
       IF (NUP(I).GT.NLEVELS) STOP 'HBOP : NUP > NLEVELS'           
-      SIGMA = SF * FNM(NLO(I),NUP(I)) *
-     *     HLINOP(WAVE,NLO(I),NUP(I),WAVEH(I),T,NE,NP(1),NHE,DOP)
+      IF (LINE_PROFILE_MODE.EQ.1) THEN
+C  HLINPROF (per A) converted to per Hz; HLINOP cutoffs applied to the
+C  tabulated profiles (HLINOP, used for the other lines, has them)
+        WCUTF = HLCUT(WAVE,NLO(I),NUP(I),WAVEH(I))
+        PROF = 0.
+        IF (WCUTF.GT.0.) THEN
+          CALL HLINPROF(WAVE,WAVEH(I),T,NE,NLO(I),NUP(I),NP(1),NHE,
+     *                  DOP,PROF)
+          PROF = PROF * WAVE * WAVE / CAA
+          IF ((NLO(I).LE.3).AND.(NUP(I).LE.30).AND.
+     *        .NOT.((NLO(I).EQ.1).AND.(NUP(I).EQ.2))) PROF = PROF*WCUTF
+        ENDIF
+      ELSE
+        PROF = HLINOP(WAVE,NLO(I),NUP(I),WAVEH(I),T,NE,NP(1),NHE,DOP)
+      ENDIF
+      SIGMA = SF * FNM(NLO(I),NUP(I)) * PROF
       CHI = 0.
       IF (W(NLO(I)).GT.0.)  ! populations would be zero also
      +   CHI = SIGMA * ( W(NUP(I))/W(NLO(I))*NP(NLO(I)) - 
@@ -352,13 +381,38 @@ C
 
 C***********************************************************************
 
+      SUBROUTINE HBOP_SET_LINE_PROFILE(MODE)
+C
+C  Selects the line profiles used by HBOP:
+C     MODE = 1  HLINPROF (default): Stehle & Hutcheon (1999) tables for
+C               Lyman (n_up 3-30), Balmer and Paschen (n_up to 30), 
+C               HLINOP for the other lines; needs hlinprof.f and its 
+C               table files.  The HLINOP cutoffs are applied.
+C     MODE = 0  HLINOP for all lines (the behaviour before Nov 2026)
+C
+      INTEGER MODE
+      INTEGER LINE_PROFILE_MODE
+      COMMON /HBOPLP/ LINE_PROFILE_MODE
+      EXTERNAL HBOPEVD
+      IF ((MODE.NE.0).AND.(MODE.NE.1)) 
+     *   STOP 'HBOP_SET_LINE_PROFILE: MODE must be 0 or 1'
+      LINE_PROFILE_MODE = MODE
+      RETURN
+      END
+
+C***********************************************************************
+
       BLOCK DATA HBOPEVD
 C
-C  Default: neutral-perturber excluded volume off.
+C  Defaults: neutral-perturber excluded volume off; line profiles from
+C  HLINPROF.
 C
       REAL EXCLUDED_VOLUME_SCALE
       COMMON /HBOPEV/ EXCLUDED_VOLUME_SCALE
+      INTEGER LINE_PROFILE_MODE
+      COMMON /HBOPLP/ LINE_PROFILE_MODE
       DATA EXCLUDED_VOLUME_SCALE /0./
+      DATA LINE_PROFILE_MODE /1/
       END
      
 
