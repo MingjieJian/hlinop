@@ -784,7 +784,7 @@ C
       REAL*8 WAVE,WAVEH,FINEST(*),FINSWT(*)
       REAL T,XNE,DOPPH,HWLOR
       INTEGER NSLOT,NOUT,NMAXG,NFFT
-      PARAMETER (NSLOT=128, NOUT=240, NMAXG=8191, NFFT=32768)
+      PARAMETER (NSLOT=128, NOUT=1200, NMAXG=8191, NFFT=32768)
       REAL*8 CLIGHT,PI
       PARAMETER (CLIGHT=2.9979258D18, PI=3.14159265358979D0)
       INTEGER KN(NSLOT),KM(NSLOT),NEXT,IS,I,J,K,NG,NH,NF
@@ -822,10 +822,13 @@ C
       RC = MIN(40.D0*W, 0.15D0*FREQNM)
       G = 2.D0*RC
       H = WMIN/8.D0
-      NH = INT(G/H)
-      IF (2*NH+1.GT.NMAXG) THEN
+C  (compare in floating point: G/H can exceed the integer range when a
+C  component is extremely narrow)
+      IF (G/H.GT.DBLE((NMAXG-1)/2)) THEN
         NH = (NMAXG-1)/2
         H = G/DBLE(NH)
+      ELSE
+        NH = INT(G/H)
       ENDIF
       NG = 2*NH + 1
       NF = 1
@@ -986,7 +989,7 @@ C
       REAL*8 WAVE,WAVEH
       REAL T,XNE
       INTEGER NSLOT,NOUT,NMAXG,NFFT
-      PARAMETER (NSLOT=128, NOUT=240, NMAXG=8191, NFFT=16384)
+      PARAMETER (NSLOT=128, NOUT=1200, NMAXG=8191, NFFT=16384)
       REAL*8 CA
       PARAMETER (CA=2.99792458D18)
       INTEGER KN(NSLOT),KM(NSLOT),NEXT,IS,I,K,NG,NH,NF
@@ -1018,10 +1021,13 @@ C
       RC = MIN(40.D0*MAX(WQ,WE), 0.15D0*WAVEH)
       G = 2.D0*RC
       H = MIN(WQ,WE)/8.D0
-      NH = INT(G/H)
-      IF (2*NH+1.GT.NMAXG) THEN
+C  (compare in floating point: G/H can exceed the integer range when a
+C  component is extremely narrow)
+      IF (G/H.GT.DBLE((NMAXG-1)/2)) THEN
         NH = (NMAXG-1)/2
         H = G/DBLE(NH)
+      ELSE
+        NH = INT(G/H)
       ENDIF
       NG = 2*NH + 1
       AQ = 0.D0

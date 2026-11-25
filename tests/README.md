@@ -50,6 +50,8 @@ None at present.
 
 ### Fixed (Nov 2026)
 
+- **`HLINPROF` added the Lorentz broadening and ignored microturbulence.** The self-broadening Lorentzian was added beyond 0.2 Å (up to 4% extra area), and the Doppler width passed in was not used for tabulated lines. Both are now convolved with the tabulated profile (`HLPCONV`). The tests check that the area does not change with n_HI, that a Doppler width at or below the thermal one adds nothing, and that a large one sets the core width.
+- **Cached convolutions.** They are now stored on 1200 instead of 240 logarithmic points (up to 2% interpolation error in steep shoulders), and the grid size no longer overflows for extremely narrow components (segmentation fault for Ly10 at 1e16 cm⁻³).
 - **`NBF = 6`.** Bound–free absorption from n ≥ 7 was missing, although `HBF` has Gaunt factors up to n = 15 and the header said 15. It is now 15. `HBOP_AUTO` then works up to the n = 15 edge (20.5 µm); before, it stopped at 3.28 µm.
 - **`HBOP` returned Inf/NaN beyond about 5 µm.** Far redward of an edge the extrapolated `HBF` overflowed while the taper had underflowed to 0. Such levels are now skipped.
 - **The dissolution edge in `HBOP` was in the wrong place.** n\* was computed with `IONH` (the infinite-mass Rydberg) instead of the code's own level energies (R_H), which put the n = 2 dissolution edge 2 Å blueward of the series limit. The air wavelength was also used as if it were in vacuum. `HBNSTAR` now uses the code's level energies, and the continuum is computed in vacuum wavelengths (`WAVE` is in air above 2000 Å, as for the lines). The edge now coincides with the series limit at which `HLINOP` cuts the lines.
@@ -61,8 +63,10 @@ None at present.
 
 3. **`STARK1` cache key.** The old `STARK1` caches `C1CON`/`C2CON`, which depend on `WAVEH`, keyed on (N, M) only, so a call with the same (N, M) and a different line centre reuses stale values. It is still so in `STARK1L`, kept unchanged. `STARK1PARTS`, used by the convolved profile, keys on (N, M, `WAVEH`).
 4. **Undefined variable in `STARK1L`.** The old `STARK1`, now `STARK1L`, computes `T3NHE` from `HE1FRC`, which is not one of its arguments; the value is never used. It is removed in `STARK1PARTS`.
-6. **`HLINPROF` adds area.** The self-broadening Lorentzian is added (not convolved) beyond 0.2 Å from the centre. This adds up to 4% to the area (Hγ, n_HI = 1e17). The test tolerance is 5%.
-7. **The published Stehle tables are not quite normalised.** Integrating the CDS profiles directly over their tabulated range gives 0.97–0.99 (Hβ, H10, Pa14, Lyβ at 1e14 cm⁻³), and HLINPROF reproduces this. The `HLINPROF` area tolerance is 5%.
-   - Tabulated profiles contain thermal Doppler broadening only; the Doppler width passed in (with microturbulence) is used only for lines that go to HLINOP.
+7. **`STEHLE` interpolation narrows Doppler-dominated cores and loses area.** STEHLE interpolates the tabulated profiles linearly in log S against log α, with nodes 0.2 dex apart. In Doppler-dominated cores (ln S ∝ −α²) the chord lies below the profile. The result:
+   - half widths are 1–6% narrower than the widths given in the CDS headers (Hα, Hβ, H10, Pα at 5000 K, 1e10–1e14 cm⁻³);
+   - integrated areas come out at 0.97–0.99.
+
+   A monotone cubic (PCHIP) in the same log–log variables gives areas of 0.987–1.000 and widths of 0.98–0.99 of the header values. So the earlier conclusion that the published tables are not normalised was mostly an artefact of this interpolation. The same interpolation is in SMElib and in Turbospectrum's HLINPROF. Not yet changed. The `HLINPROF` area tolerance is 5%.
    - Lyman alpha is left to HLINOP on purpose (its far-wing satellites); to be revisited.
 8. **`hlinprof.f` does not compile on its own.** It needs a `DATA.FILES` include that only `SYNTH/Makefile` generates. The tests generate it themselves.

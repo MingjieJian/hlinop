@@ -125,10 +125,11 @@ def profile(nlo, nup, T, ne, nh, nhe, dop, waves, wave0=None, with_cut=False, co
     return out[:, 1], out[:, 2]
 
 
-def hlinprof(nlo, nup, T, ne, nh, nhe, dop, waves, wave0=None):
-    """HLINPROF (per A) at the given wavelengths."""
+def hlinprof(nlo, nup, T, ne, nh, nhe, dop, waves, wave0=None, convolution=None):
+    """HLINPROF (per A) at the given wavelengths; convolution: HLINOP_SET_CONVOLUTION mode."""
     wave0 = line_centre(nlo, nup) if wave0 is None else wave0
-    head = "%d %d %.10f %.6e %.6e %.6e %.6e %.6e\n" % (nlo, nup, wave0, T, ne, nh, nhe, dop)
+    head = "%d %d %.10f %.6e %.6e %.6e %.6e %.6e %d\n" % (nlo, nup, wave0, T, ne, nh, nhe, dop,
+                                                          -1 if convolution is None else convolution)
     return run("drv_hlinprof", head + "".join("%.10f\n" % w for w in waves))[:, 1]
 
 
