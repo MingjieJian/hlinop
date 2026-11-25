@@ -109,11 +109,15 @@ def detuning_grid(wave0, rel_max=0.15, dmin=1e-4, npts=3000):
     return np.concatenate([wave0 - d[::-1], [wave0], wave0 + d])
 
 
-def profile(nlo, nup, T, ne, nh, nhe, dop, waves, wave0=None, with_cut=False):
-    """HPROFL and HLINOP (per Hz) at the given wavelengths (and the HLCUT weight)."""
+def profile(nlo, nup, T, ne, nh, nhe, dop, waves, wave0=None, with_cut=False, stark=None, stark1=False):
+    """HPROFL and HLINOP (per Hz) at the given wavelengths (and the HLCUT weight, or STARK1).
+    stark: Stark mode for HLINOP_SET_STARK (None = default)."""
     wave0 = line_centre(nlo, nup) if wave0 is None else wave0
-    head = "%d %d %.10f %.6e %.6e %.6e %.6e %.6e\n" % (nlo, nup, wave0, T, ne, nh, nhe, dop)
+    head = "%d %d %.10f %.6e %.6e %.6e %.6e %.6e %d\n" % (nlo, nup, wave0, T, ne, nh, nhe, dop,
+                                                          -1 if stark is None else stark)
     out = run("drv_profile", head + "".join("%.10f\n" % w for w in waves))
+    if stark1:
+        return out[:, 4]
     if with_cut:
         return out[:, 1], out[:, 2], out[:, 3]
     return out[:, 1], out[:, 2]
@@ -146,7 +150,7 @@ def area_per_angstrom(waves, phi_lam):
     return float(np.trapezoid(p, w) if hasattr(np, "trapezoid") else np.trapz(p, w))
 
 
-def hbop(nh, nhe, ne, T, dop, lines, waves, scale=None, profile=None):
+def hbop(nh, nhe, ne, T, dop, lines, waves, scale=None, profile=None, stark=None):
     """HBOP total and continuous opacity (cm^-1); lines: iterable of (nlo, nup, waveh).
     scale: excluded-volume scale (HBOP_SET_EXCLUDED_VOLUME); profile: line-profile mode
     (HBOP_SET_LINE_PROFILE).  Each is None (never set: the code's default), a number, or one
@@ -160,8 +164,9 @@ def hbop(nh, nhe, ne, T, dop, lines, waves, scale=None, profile=None):
         return list(x)
     sc = per_wave(scale, -1.0)
     md = per_wave(profile, -1)
+    sk = per_wave(stark, -1)
     head = "%.6e %.6e %.6e %.6e %.6e %d\n" % (nh, nhe, ne, T, dop, len(lines))
     head += "".join("%d %d %.10f\n" % l for l in lines)
-    out = run("drv_hbop", head + "".join("%.10f %.8e %d\n" % (w, float(s), int(m))
-                                         for w, s, m in zip(waves, sc, md)))
+    out = run("drv_hbop", head + "".join("%.10f %.8e %d %d\n" % (w, float(s), int(m), int(k))
+                                         for w, s, m, k in zip(waves, sc, md, sk)))
     return out[:, 1], out[:, 2]

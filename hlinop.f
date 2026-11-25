@@ -18,6 +18,12 @@ C  REAL FUNCTION HLINOP(WAVE,NBLO,NBUP,WAVEH,T,XNE,H1FRC,HE1FRC,DOPPLE)
 C  REAL FUNCTION HLCUT(WAVE,NBLO,NBUP,WAVEH)
 C  REAL FUNCTION HPROFL(N,M,WAVE,WAVEH,T,XNE,H1FRC,HE1FRC,DOPPH)
 C  REAL FUNCTION STARK1(N,M,WAVE,WAVEH,T,XNE)
+C  REAL FUNCTION STARK1C(N,M,WAVE,WAVEH,T,XNE)
+C  REAL FUNCTION STARK1L(N,M,WAVE,WAVEH,T,XNE)
+C  SUBROUTINE STARK1PARTS(N,M,WAVE,WAVEH,T,XNE,PQ,PE,PF,GAMO,SB)
+C  SUBROUTINE HLFFT(A,NN,ISIGN)
+C  SUBROUTINE HLINOP_SET_STARK(MODE)
+C  BLOCK DATA HLSTRKD
 C  REAL FUNCTION HFNM(N,M)
 C  REAL FUNCTION VCSE1F(X)
 C  REAL FUNCTION SOFBET(B,P,N,M)
@@ -744,6 +750,261 @@ C
 C***********************************************************************
       FUNCTION STARK1(N,M,WAVE,WAVEH,T,XNE)
 C
+C  Stark broadened line profile, normalised to unity with frequency.
+C
+C  Nov 2026: by default (HLINOP_SET_STARK(1)) the ion quasistatic 
+C  profile is convolved with the electron profile (impact core plus
+C  quasistatic electron wing), STARK1C.  The earlier code added the
+C  parts (area 1.7-2.1); it is kept as STARK1L and used for Lyman
+C  alpha (to be revisited) and when HLINOP_SET_STARK(0) is set.
+C
+      INTEGER N,M
+      REAL*8 WAVE,WAVEH
+      REAL T,XNE,STARK1L,STARK1C
+      INTEGER STARK_MODE
+      COMMON /HLSTRK/ STARK_MODE
+      EXTERNAL HLSTRKD
+      IF ((STARK_MODE.EQ.0).OR.((N.EQ.1).AND.(M.EQ.2))) THEN
+        STARK1 = STARK1L(N,M,WAVE,WAVEH,T,XNE)
+      ELSE
+        STARK1 = STARK1C(N,M,WAVE,WAVEH,T,XNE)
+      ENDIF
+      RETURN
+      END
+
+C***********************************************************************
+      REAL FUNCTION STARK1C(N,M,WAVE,WAVEH,T,XNE)
+C
+C  Convolved Stark profile (per unit frequency, unit area):
+C     phi = norm(q) (*) norm(f + e)
+C  q = ion quasistatic (Holtsmark with Debye shielding), f = electron
+C  impact (Lorentzian with the Lewis-cutoff width GAM(beta)), e = 
+C  quasistatic electron wing; the parts are those of STARK1L 
+C  (STARK1PARTS).  Chosen over norm(q+e) (*) norm(f) by comparison 
+C  with the Stark-only profiles of Stehle & Hutcheon (1999; Balmer, 
+C  Paschen, Lyman to n_up = 30) and Lemke (1997; VCS, Brackett): 
+C  median HWHM and peak within 2-5 per cent, wings within 5-8 per cent.
+C
+C  For each (N, M, WAVEH, T, XNE) the convolution is computed once on 
+C  a uniform wavelength grid by FFT (half-width 2*RC, RC = 40 times the
+C  larger of the Holtsmark and impact widths, at most 0.15 WAVEH) and
+C  stored on a logarithmic grid for |dlambda| <= RC; beyond RC the 
+C  normalised parts are added (the convolution of two normalised 
+C  profiles tends to their sum in the far wings).  NSLOT states are
+C  cached (round robin).
+C
+      IMPLICIT NONE
+      INTEGER N,M
+      REAL*8 WAVE,WAVEH
+      REAL T,XNE
+      INTEGER NSLOT,NOUT,NMAXG,NFFT
+      PARAMETER (NSLOT=128, NOUT=240, NMAXG=8191, NFFT=16384)
+      REAL*8 CA
+      PARAMETER (CA=2.99792458D18)
+      INTEGER KN(NSLOT),KM(NSLOT),NEXT,IS,I,K,NG,NH,NF
+      REAL*8 KW(NSLOT),KT(NSLOT),KNE(NSLOT)
+      REAL*8 AQS(NSLOT),AES(NSLOT),RCS(NSLOT)
+      REAL*8 XO(NOUT,NSLOT),YB(NOUT,NSLOT),YR(NOUT,NSLOT),Y0(NSLOT)
+      REAL*8 Q(NMAXG),E(NMAXG),CV(NMAXG)
+      COMPLEX*16 FA(NFFT),FB(NFFT)
+      REAL*8 PQ,PE,PF,GAM0,SB,WQ,WE,RC,H,G,X,AQ,AE,D,AD,FAC
+      REAL*8 R,W,YL,YH,PHI
+      SAVE
+      DATA KN/NSLOT*0/, KM/NSLOT*0/, NEXT/1/
+C
+C  Cached state?
+C
+      DO 10 IS = 1, NSLOT
+        IF ((KN(IS).EQ.N).AND.(KM(IS).EQ.M).AND.(KW(IS).EQ.WAVEH)
+     *      .AND.(KT(IS).EQ.DBLE(T)).AND.(KNE(IS).EQ.DBLE(XNE)))
+     *      GOTO 50
+   10 CONTINUE
+C
+C  Build: widths from the parts at line centre
+C
+      IS = NEXT
+      NEXT = MOD(NEXT,NSLOT) + 1
+      CALL STARK1PARTS(N,M,WAVEH,WAVEH,T,XNE,PQ,PE,PF,GAM0,SB)
+      WQ = SB
+      WE = MAX(GAM0,1.D-6)*SB
+      RC = MIN(40.D0*MAX(WQ,WE), 0.15D0*WAVEH)
+      G = 2.D0*RC
+      H = MIN(WQ,WE)/8.D0
+      NH = INT(G/H)
+      IF (2*NH+1.GT.NMAXG) THEN
+        NH = (NMAXG-1)/2
+        H = G/DBLE(NH)
+      ENDIF
+      NG = 2*NH + 1
+      AQ = 0.D0
+      AE = 0.D0
+      DO 20 I = 1, NG
+        X = DBLE(I-NH-1)*H
+        CALL STARK1PARTS(N,M,WAVEH+X,WAVEH,T,XNE,PQ,PE,PF,GAM0,SB)
+        FAC = CA/(WAVEH+X)**2
+        Q(I) = PQ*FAC
+        E(I) = (PF+PE)*FAC
+        AQ = AQ + Q(I)
+        AE = AE + E(I)
+   20 CONTINUE
+C  areas (per A) including the far wings beyond the grid (~dl**-2.5)
+      AQ = AQ*H + 2.D0/3.D0*(Q(1)+Q(NG))*G
+      AE = AE*H + 2.D0/3.D0*(E(1)+E(NG))*G
+C  FFT convolution of the normalised parts
+      NF = 1
+   25 NF = 2*NF
+      IF (NF.LT.2*NG) GOTO 25
+      IF (NF.GT.NFFT) STOP 'STARK1C: NFFT too small'
+      DO 30 I = 1, NF
+        FA(I) = (0.D0,0.D0)
+        FB(I) = (0.D0,0.D0)
+   30 CONTINUE
+      DO 31 I = 1, NG
+        FA(I) = DCMPLX(Q(I)/AQ,0.D0)
+        FB(I) = DCMPLX(E(I)/AE,0.D0)
+   31 CONTINUE
+      CALL HLFFT(FA,NF,1)
+      CALL HLFFT(FB,NF,1)
+      DO 32 I = 1, NF
+        FA(I) = FA(I)*FB(I)
+   32 CONTINUE
+      CALL HLFFT(FA,NF,-1)
+      DO 33 I = 1, NG
+        CV(I) = MAX(DBLE(FA(I+NH))*H/DBLE(NF), 0.D0)
+   33 CONTINUE
+C  store on a log grid of |dlambda| from H to RC, both sides
+      Y0(IS) = CV(NH+1)
+      DO 40 K = 1, NOUT
+        XO(K,IS) = H*(RC/H)**(DBLE(K-1)/DBLE(NOUT-1))
+        R = XO(K,IS)/H
+        I = INT(R)
+        W = R - DBLE(I)
+        YR(K,IS) = LOG(MAX((1.D0-W)*CV(NH+1+I)+W*CV(NH+2+I),1.D-300))
+        YB(K,IS) = LOG(MAX((1.D0-W)*CV(NH+1-I)+W*CV(NH-I),1.D-300))
+   40 CONTINUE
+      KN(IS) = N
+      KM(IS) = M
+      KW(IS) = WAVEH
+      KT(IS) = DBLE(T)
+      KNE(IS) = DBLE(XNE)
+      AQS(IS) = AQ
+      AES(IS) = AE
+      RCS(IS) = RC
+C
+C  Evaluate
+C
+   50 D = WAVE - WAVEH
+      AD = ABS(D)
+      IF (AD.LE.RCS(IS)) THEN
+        IF (AD.LT.XO(1,IS)) THEN
+          IF (D.GE.0.D0) THEN
+            YH = EXP(YR(1,IS))
+          ELSE
+            YH = EXP(YB(1,IS))
+          ENDIF
+          PHI = Y0(IS) + (YH-Y0(IS))*AD/XO(1,IS)
+        ELSE
+          R = 1.D0 + DBLE(NOUT-1)*LOG(AD/XO(1,IS))/
+     *        LOG(XO(NOUT,IS)/XO(1,IS))
+          K = MIN(INT(R),NOUT-1)
+          W = (LOG(AD)-LOG(XO(K,IS)))/(LOG(XO(K+1,IS))-LOG(XO(K,IS)))
+          IF (D.GE.0.D0) THEN
+            YL = YR(K,IS)
+            YH = YR(K+1,IS)
+          ELSE
+            YL = YB(K,IS)
+            YH = YB(K+1,IS)
+          ENDIF
+          PHI = EXP((1.D0-W)*YL + W*YH)
+        ENDIF
+        STARK1C = PHI*WAVE*WAVE/CA
+      ELSE
+        CALL STARK1PARTS(N,M,WAVE,WAVEH,T,XNE,PQ,PE,PF,GAM0,SB)
+        STARK1C = PQ/AQS(IS) + (PF+PE)/AES(IS)
+      ENDIF
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HLFFT(A,NN,ISIGN)
+C
+C  In-place radix-2 complex FFT, NN a power of 2.  ISIGN = 1: forward
+C  (exp(-i...)), ISIGN = -1: inverse without the 1/NN factor.
+C
+      IMPLICIT NONE
+      INTEGER NN,ISIGN,I,J,K,M,MMAX,ISTEP
+      COMPLEX*16 A(NN),TMP,WP,W
+      REAL*8 THETA,PI2
+      PARAMETER (PI2=6.283185307179586D0)
+      J = 1
+      DO 10 I = 1, NN
+        IF (J.GT.I) THEN
+          TMP = A(J)
+          A(J) = A(I)
+          A(I) = TMP
+        ENDIF
+        M = NN/2
+    5   IF ((M.GE.2).AND.(J.GT.M)) THEN
+          J = J - M
+          M = M/2
+          GOTO 5
+        ENDIF
+        J = J + M
+   10 CONTINUE
+      MMAX = 1
+   20 IF (NN.GT.MMAX) THEN
+        ISTEP = 2*MMAX
+        THETA = -DBLE(ISIGN)*PI2/DBLE(ISTEP)
+        WP = DCMPLX(COS(THETA),SIN(THETA))
+        W = (1.D0,0.D0)
+        DO 40 M = 1, MMAX
+          DO 30 I = M, NN, ISTEP
+            K = I + MMAX
+            TMP = W*A(K)
+            A(K) = A(I) - TMP
+            A(I) = A(I) + TMP
+   30     CONTINUE
+          W = W*WP
+   40   CONTINUE
+        MMAX = ISTEP
+        GOTO 20
+      ENDIF
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HLINOP_SET_STARK(MODE)
+C
+C  Stark profiles in HLINOP/HPROFL:
+C     MODE = 1  convolution of the quasistatic and impact parts (default)
+C     MODE = 0  the parts added, as before Nov 2026 (area 1.7-2.1)
+C  Lyman alpha always uses the earlier construction (for now).
+C
+      INTEGER MODE
+      INTEGER STARK_MODE
+      COMMON /HLSTRK/ STARK_MODE
+      EXTERNAL HLSTRKD
+      IF ((MODE.NE.0).AND.(MODE.NE.1))
+     *   STOP 'HLINOP_SET_STARK: MODE must be 0 or 1'
+      STARK_MODE = MODE
+      RETURN
+      END
+
+C***********************************************************************
+      BLOCK DATA HLSTRKD
+C  Default: convolved Stark profiles.
+      INTEGER STARK_MODE
+      COMMON /HLSTRK/ STARK_MODE
+      DATA STARK_MODE /1/
+      END
+
+C***********************************************************************
+      FUNCTION STARK1L(N,M,WAVE,WAVEH,T,XNE)
+C
+C  Legacy STARK1 (before Nov 2026), kept unchanged: the quasistatic and
+C  impact parts are ADDED, so the area is 1.7-2.1, not 1.  Used for 
+C  Lyman alpha and when HLINOP_SET_STARK(0) is set.
+C
 C  Returns the Stark broadened line profile.  The code follows Griem's 
 C  theories (mostly 1960 ApJ, 132, 883) with corrections to approximate 
 C  the Vidal, Cooper & Smith (1973, ApJS 25, 37) profiles.
@@ -889,14 +1150,190 @@ C  DSQRT(WAVE/WAVEH) corrects the long range part to dfreq**-5/2
 C  asymptote, (see Stehle and Hutcheon 1999, A&AS 140, 93).
 C
       DBETA = CLIGHT/FREQ/FREQ/XKNM/FO
-      STARK1 = (PRQS*(1.+FNS)+F)*DBETA * DSQRT(WAVE/WAVEH)
+      STARK1L = (PRQS*(1.+FNS)+F)*DBETA * DSQRT(WAVE/WAVEH)
 C
 C  The red wing is multiplied by the Boltzmann factor to roughly account
 C  for quantum effects (Stehle 1994, A&AS 104, 509 eqn 7). Assume 
 C  absorption case.  If emission do for DEL.GT.0.
 C
-      IF (DEL.LT.0.d0) STARK1 = STARK1 * DEXP(-DABS(H*DEL)/K/T)
+      IF (DEL.LT.0.d0) STARK1L = STARK1L * DEXP(-DABS(H*DEL)/K/T)
 C
+      END
+
+
+C***********************************************************************
+      SUBROUTINE STARK1PARTS(N,M,WAVE,WAVEH,T,XNE,PQ,PE,PF,GAMO,SB)
+C
+C  The three parts of the STARK1 profile at WAVE, each per unit 
+C  frequency and with the same factors as in STARK1L (dBeta/dfreq,
+C  sqrt(WAVE/WAVEH), red-wing Boltzmann factor):
+C    PQ  ion quasistatic (PRQS)
+C    PE  electron quasistatic wing (PRQS*FNS)
+C    PF  electron impact (Lorentzian with width GAM(beta))
+C  and GAMO = GAM at this WAVE (beta units), SB = FO*XKNM (A per unit
+C  beta).  Same physics as STARK1L; the line-dependent constants are
+C  cached on (N, M, WAVEH).
+C
+C
+C  Returns the Stark broadened line profile.  The code follows Griem's 
+C  theories (mostly 1960 ApJ, 132, 883) with corrections to approximate 
+C  the Vidal, Cooper & Smith (1973, ApJS 25, 37) profiles.
+C
+C  Area normalised to unity with frequency.
+C
+C  by Deane Peterson & Bob Kurucz.
+C  (adapted, corrected and comments added by PB)
+C
+      REAL*8 WAVE,WAVEH,DELW,DEL,F,FO,CLIGHT,FREQ,FREQNM
+      REAL*4 K
+      DIMENSION Y1WTM(2,2),XKNMTB(4,3)
+      LOGICAL LYMANALF
+      REAL*8 PQ,PE,PF,GAMO,SB,FAC,LASTW
+      SAVE
+C
+C  Knm constants as defined by Griem (1960, ApJ 132, 883) for the long 
+C  range Holtsmark profile (due to ions only). Lyman and Balmer series 
+C  are from VCS, higher series from elsewhere.
+C
+      DATA XKNMTB/0.0001716, 0.0090190, 0.1001000, 0.5820000,
+     1            0.0005235, 0.0177200, 0.1710000, 0.8660000,
+     2            0.0008912, 0.0250700, 0.2230000, 1.0200000/
+C
+      DATA Y1WTM/1.E18, 1.E17, 1.E16, 1.E14/
+      DATA N1/0/, M1/0/, LASTW/-1.D0/
+C
+      PARAMETER (CLIGHT = 2.9979258E18)
+      PARAMETER (PI = 3.14159265359, SQRTPI = 1.77245385)
+      PARAMETER (H = 6.62618E-27)  !Planck in cgs
+      PARAMETER (K = 1.38066E-16)  !Boltzmann in cgs
+C
+C  Variables depending on conditions
+C
+      T4 = T/10000.
+      T43 = T4**0.3
+      XNE16 = XNE**0.1666667
+      PP = XNE16*0.08989/SQRT(T) ! the shielding parameter 
+      FO = XNE16**4*1.25E-9      ! Holtsmark normal field strength
+      Y1B = 2./(1.+0.012/T*SQRT(XNE/T))
+      Y1S = T43/XNE16
+      C1D = FO*78940./ T
+      C2D = FO**2/5.96E-23/XNE
+      GCON1 = 0.2+0.09*SQRT(T4)/(1.+XNE/1.E13)
+      GCON2 = 0.2/(1.+XNE/1.E15)
+C
+      DELW = WAVE-WAVEH
+      FREQNM = CLIGHT/WAVEH
+      FREQ = CLIGHT/WAVE
+      DEL = FREQ-FREQNM
+C
+C  Variables dependent on line - compute first time only
+C
+      IF((N.NE.N1).OR.(M.NE.M1).OR.(WAVEH.NE.LASTW)) THEN
+         N1 = N
+         M1 = M
+         LASTW = WAVEH
+         MMN = M-N
+         XN = N
+         XN2 = XN*XN
+         XM = M
+         XM2 = XM*XM
+         XMN2 = XM2*XN2
+         XM2MN2 = XM2-XN2
+         GNM = XM2MN2/XMN2
+C
+C  Knm constants not tabulated from approximate asymptotic expression 
+C  (Griem 1960 eqn 33) where 1./(1.+.13/FLOAT(MMN)) appears to be a 
+C  correction factor to match to the tables.
+C
+         IF ((MMN.LE.3).AND.(N.LE.4)) THEN
+            XKNM = XKNMTB(N,MMN)
+         ELSE
+            XKNM = 5.5E-5/GNM*XMN2/(1.+.13/FLOAT(MMN))
+         END IF
+C
+C  Some weighting factors which relate to y1, which is the velocity at 
+C  which the minimum impact parameter (where second order perturbation 
+C  theory breaks down) and the Lewis cutoff (the limit of validity of 
+C  the impact approximation) are the same.
+C
+         IF(M.EQ.2) THEN
+            Y1NUM = 550.
+         ELSE IF (M.EQ.3) THEN
+            Y1NUM = 380.
+         ELSE
+            Y1NUM = 320.
+         END IF
+         IF (MMN.LE.2 .AND. N.LE.2) THEN
+            Y1WHT = Y1WTM(N,MMN)
+         ELSE IF (MMN.LE.3) THEN
+            Y1WHT = 1.E14
+         ELSE
+            Y1WHT = 1.E13
+         END IF
+C
+         C1CON = XKNM/WAVEH*GNM*XM2MN2
+         C2CON = (XKNM/WAVEH)**2
+C
+      ENDIF
+C
+C  Compute line profile
+C
+C  PRQS is the quasistatic ion contribution
+C  FNS  is the quasistatic electron contribution rel to PRQS
+C  F    is the impact electron contribution
+C
+C  First compute the width of the impact electron profile roughly Griem
+C  (1967, ApJ 147, 1092) eqn for w.
+C
+      WTY1 = 1./(1.+XNE/Y1WHT)
+      Y1SCAL = Y1NUM*Y1S*WTY1+Y1B*(1.-WTY1)
+      C1 = C1D*C1CON*Y1SCAL
+      C2 = C2D*C2CON
+      G1 = 6.77*SQRT(C1)
+      BETA = DABS(DELW)/FO/XKNM
+      Y1 = C1*BETA
+      Y2 = C2*BETA**2
+      IF ((Y2.LE.1.E-4).AND.(Y1.LE.1.E-5)) THEN
+         GAM = G1*AMAX1(0.,0.2114+LOG(SQRT(C2)/C1))*(1.-GCON1-GCON2)
+      ELSE
+         GAM = G1*(0.5*EXP(-MIN(80.,Y1))+VCSE1F(Y1)-0.5*VCSE1F(Y2))*
+     *            (1.-GCON1/(1.+(90.*Y1)**3)-GCON2/(1.+2000.*Y1))
+         IF (GAM.LE.1.E-20) GAM = 0.
+      END IF
+C
+C  Compute individual quasistatic and impact profiles.
+C
+      PRQS = SOFBET(BETA,PP,N,M)
+      IF (GAM.GT.0.) THEN
+         F = GAM/PI/(GAM*GAM+BETA*BETA)
+      ELSE
+	 F = 0.D0
+      ENDIF
+C
+C  Fraction of electrons which count as quasistatic. A fit to eqn 8 
+C  (2nd term) of Griem (1967, ApJ 147, 1092).
+C
+      P1 = (0.9*Y1)**2
+      FNS = (P1+0.03*SQRT(Y1))/(P1+1.)
+C
+C  DBETA (=dBeta/dfreq) changes the area normalisation. 
+C  DSQRT(WAVE/WAVEH) corrects the long range part to dfreq**-5/2
+C  asymptote, (see Stehle and Hutcheon 1999, A&AS 140, 93).
+C
+      DBETA = CLIGHT/FREQ/FREQ/XKNM/FO
+      FAC = DBETA * DSQRT(WAVE/WAVEH)
+C
+C  The red wing is multiplied by the Boltzmann factor to roughly account
+C  for quantum effects (Stehle 1994, A&AS 104, 509 eqn 7). Assume 
+C  absorption case.  If emission do for DEL.GT.0.
+C
+      IF (DEL.LT.0.d0) FAC = FAC * DEXP(-DABS(H*DEL)/K/T)
+      PQ = PRQS*FAC
+      PE = PRQS*FNS*FAC
+      PF = F*FAC
+      GAMO = GAM
+      SB = FO*XKNM
+      RETURN
       END
 
 
