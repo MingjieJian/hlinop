@@ -25,6 +25,7 @@ GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux fo
    - `HBOP` recomputes its cached populations when the excluded-volume setting changes;
    - `w` → 1 without perturbers, and `w` falls with n;
    - the continuum is smooth across the Balmer limit;
+   - `STARK1` has unit area and matches the Stark-only profiles of Stehlé & Hutcheon (`data/stehle_cds_subset.json`) and of Lemke's VCS tables for Brackett (`data/lemke_vcs_brackett.json`, from `make_vcs_subset.py`); Lyman alpha keeps the earlier profile;
    - `HLINOP` equals `HPROFL` × `HLCUT` (the cutoff weight that HBOP applies to tabulated profiles);
    - `HLINPROF` returns the CDS profiles at table nodes (`data/stehle_cds_subset.json`, from `make_cds_subset.py`), has unit area within the tables' own normalisation, scales quasistatically above a line's last density, and returns HLINOP where there is no table;
    - `HBOP` uses the tabulated profiles by default and cuts them at the series limit.
@@ -45,14 +46,18 @@ GitHub Actions (`.github/workflows/tests.yml`) runs the same command on Linux fo
 
 ### Covered by `xfail` tests
 
-- **`STARK1` adds instead of convolving.** It adds the ion quasistatic, electron quasistatic and electron impact parts instead of convolving them. `HPROFL`/`HLINOP` areas are 1.74–2.14 wherever Stark broadening dominates (for example Balmer, Paschen and Brackett lines at T = 5000–10000 K, n_e = 1e12–1e16 cm⁻³). They are 1.02–1.13 only where Doppler broadening dominates the core.
+- **`HPROFL` adds the broadening mechanisms outside the core.** Inside the core it uses the dominant mechanism (Doppler, Lorentz or Stark); outside the core it adds all of them. Where Doppler broadening dominates the core, this adds 2–39% to the area. Examples: Hγ, H8, H10, H14 and Pa10 at 5000 K and n_e = 1e12, and Hγ at 6300 K and 1e14. `STARK1` itself has unit area.
+
+### Fixed (Nov 2026)
+
+- **`STARK1` added the ion quasistatic, electron quasistatic and electron impact parts instead of convolving them.** Areas were 1.74–2.14. The parts are now convolved (B: norm(ion) ⊛ norm(impact + electron wing)), with mode 0 keeping the old code. The tests compare with Stehlé & Hutcheon (n_up ≥ 8; HWHM and peak within 10%) and with Lemke VCS for Brackett (within 15%).
 
 ### Found while writing the tests, not yet covered
 
 1. **The dissolution edge in `HBOP` is in the wrong place.** The effective quantum number n\* in `HBOP` uses `IONH = 2.17991e-11` erg, the infinite-mass Rydberg (109 737 cm⁻¹). The level energies use R_H = 109 678.764 cm⁻¹. So the n = 2 dissolution edge sits at 3644.98 Å, while the series limit from the code's own levels is at 3647.02 Å (both vacuum). In addition, `HLINOP` cuts non-Lyman lines at the series limit in air, while the `HBOP` continuum is computed in vacuum.
 2. **`NBF` disagrees with the header.** `NBF = 6`, so bound–free absorption from n ≥ 7 is omitted, while the header says the limit is 15.
-3. **`STARK1` cache key.** `STARK1` caches `C1CON`/`C2CON`, which depend on `WAVEH`, keyed on (N, M) only. A call with the same (N, M) and a different line centre reuses stale values. SMElib added `WAVEH` to the key.
-4. **Undefined variable in `STARK1`.** `STARK1` computes `T3NHE` from `HE1FRC`, which is not one of its arguments; the value is never used.
+3. **`STARK1` cache key.** The old `STARK1` caches `C1CON`/`C2CON`, which depend on `WAVEH`, keyed on (N, M) only, so a call with the same (N, M) and a different line centre reuses stale values. It is still so in `STARK1L`, kept unchanged. `STARK1PARTS`, used by the convolved profile, keys on (N, M, `WAVEH`).
+4. **Undefined variable in `STARK1L`.** The old `STARK1`, now `STARK1L`, computes `T3NHE` from `HE1FRC`, which is not one of its arguments; the value is never used. It is removed in `STARK1PARTS`.
 5. **Self-broadening density.** `HBOP` passes `NP(1)`, the ground-state population, as the H I density used for self-broadening, instead of the total `NH` (equal to < 0.1% in FGK photospheres).
 6. **`HLINPROF` adds area.** The self-broadening Lorentzian is added (not convolved) beyond 0.2 Å from the centre. This adds up to 4% to the area (Hγ, n_HI = 1e17). The test tolerance is 5%.
 7. **The published Stehle tables are not quite normalised.** Integrating the CDS profiles directly over their tabulated range gives 0.97–0.99 (Hβ, H10, Pa14, Lyβ at 1e14 cm⁻³), and HLINPROF reproduces this. The `HLINPROF` area tolerance is 5%.
