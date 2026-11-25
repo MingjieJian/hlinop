@@ -46,14 +46,18 @@ C
       REAL*8 WAVE, WAVEH(NMAX), VACAIR 
       REAL*8 EHYD(NMAXMAX), WCONTH(NMAXMAX), WLINEH(NMAXMAX,NMAXMAX)
       LOGICAL FIRST
-      SAVE FIRST, EHYD, WCONTH, WLINEH
-      DATA FIRST/.TRUE./
+      INTEGER MEDIUM_AIR, LMED
+      COMMON /HLMED/ MEDIUM_AIR
+      EXTERNAL HLCONVD
+      SAVE FIRST, EHYD, WCONTH, WLINEH, LMED
+      DATA FIRST/.TRUE./, LMED/-1/
 C
 C  On first call, compute and store:
 C
 C     energy levels in the H atom - EHYD(n)
 C     bound-free continua break wavelengths in Å in air - WCONTH(n)
 C     line wavelengths in Å in air - WLINEH(n_low,n_upper)
+C     (in vacuum with HLINOP_SET_MEDIUM(0))
 C
 C        where n are relevant principal quantum numbers
 C
@@ -61,7 +65,9 @@ C
         STOP 'HBOP_AUTO: NMAX exceeds NMAXMAX'
       ENDIF  
 
-      IF (FIRST) THEN
+C  (recomputed when the medium changes, HLINOP_SET_MEDIUM)
+      IF (FIRST.OR.(LMED.NE.MEDIUM_AIR)) THEN
+        LMED = MEDIUM_AIR
         EHYD(1) =      0.000D0
         EHYD(2) =  82259.105D0
         EHYD(3) =  97492.302D0
@@ -74,11 +80,13 @@ C
         EHYD(I) = 109678.764D0 - 109677.576D0/(I*I)  
  1      CONTINUE 
         DO 2 I = 1, NMAXMAX
-        WCONTH(I) = VACAIR(1.D8/(109678.764D0 - EHYD(I)))
+        WCONTH(I) = 1.D8/(109678.764D0 - EHYD(I))
+        IF (MEDIUM_AIR.EQ.1) WCONTH(I) = VACAIR(WCONTH(I))
  2      CONTINUE
         DO 4 I = 1, NMAXMAX-1
         DO 3 J = I+1, NMAXMAX
-        WLINEH(I,J) = VACAIR(1.D8/(EHYD(J)-EHYD(I)))
+        WLINEH(I,J) = 1.D8/(EHYD(J)-EHYD(I))
+        IF (MEDIUM_AIR.EQ.1) WLINEH(I,J) = VACAIR(WLINEH(I,J))
  3      CONTINUE
  4      CONTINUE
         FIRST = .FALSE.

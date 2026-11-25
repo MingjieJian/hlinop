@@ -34,6 +34,7 @@ PROGRAMS = {
     "drv_hlckey": ["hlinop.f"],
     "drv_files": ["hlinprof.f", "hlinop.f"],
     "drv_hbopbf": ["hbop.f", "hlinprof.f", "hlinop.f"],
+    "drv_medium": ["hbop.f", "hlinprof.f", "hlinop.f"],
 }
 DATA = {"HFILE": "stehle_long.dat", "HSELFFILE": "bpo_self.grid.DEC", "HVCSFILE": "vcsbalmer.dat"}
 
@@ -233,4 +234,18 @@ def hbop_bf(nh, nhe, ne, T, waves):
     txt = "%.8e %.8e %.8e %.8e\n" % (nh, nhe, ne, T) + "".join("%.10f\n" % w for w in waves)
     out = run("drv_hbopbf", txt)
     return out[0][:3], out[1:, 1:]
+
+
+def medium(iair, calls):
+    """HLCUT, HLINOP and HBOP_BF (see drivers/drv_medium.f) with HLINOP_SET_MEDIUM(iair) (None: not
+    called).  calls: (wave, nlo, nup, waveh)."""
+    head = "%d\n" % (-1 if iair is None else iair)
+    return run("drv_medium", head + "".join("%.10f %d %d %.10f\n" % c for c in calls))
+
+
+def vacair(w):
+    """Vacuum to air wavelength (A), as VACAIR in hlinop.f."""
+    w = np.asarray(w, float)
+    s = 1e8 / w
+    return w / (1.0000834213 + 2406030.0 / (1.30e10 - s ** 2) + 15997.0 / (3.89e9 - s ** 2))
 

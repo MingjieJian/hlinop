@@ -29,6 +29,7 @@ C  SUBROUTINE HLTWIN
 C  SUBROUTINE HLCKEY(KEY,NK,KEYS,NSLOT,IDX,NENT,NUSED,IGEN,IE,HIT)
 C  SUBROUTINE HLINOP_SET_CONVOLUTION(MODE)
 C  SUBROUTINE HLINOP_CLEAR_CACHE
+C  SUBROUTINE HLINOP_SET_MEDIUM(IAIR)
 C  BLOCK DATA HLCONVD
 C  REAL FUNCTION HFNM(N,M)
 C  REAL FUNCTION VCSE1F(X)
@@ -73,6 +74,9 @@ C
       REAL*8 EHYD(100),CONTH(100),WCUT(100)
       REAL*8 VACAIR
       LOGICAL FIRST,REFLECT,CUTNEXT
+      INTEGER MEDIUM_AIR
+      COMMON /HLMED/ MEDIUM_AIR
+      EXTERNAL HLCONVD
       SAVE
       DATA FIRST/.TRUE./
 C
@@ -91,9 +95,10 @@ C  thus this *might* estimate this effect.
 C
       DATA REFLECT/.FALSE./
 C
-C  Lyman series is treated in vacuum. The rest is converted to air.
+C  Lyman series is treated in vacuum. The rest is converted to air
+C  (all in vacuum with HLINOP_SET_MEDIUM(0)).
 C
-      IF (NBLO.EQ.1) THEN
+      IF ((NBLO.EQ.1).OR.(MEDIUM_AIR.EQ.0)) THEN
         IFVAC = 1
       ELSE
         IFVAC = 0
@@ -210,11 +215,15 @@ C  at WAVE: blue cut at the series limit, red cut WCUT for the series
 C  (with an exponential taper for alpha lines).  Lets callers apply 
 C  the same cutoffs to profiles from other sources (e.g. HLINPROF in
 C  HBOP).  Must follow HLINOP with CUTNEXT = .FALSE. and 
-C  REFLECT = .FALSE. (the defaults there).
+C  REFLECT = .FALSE. (the defaults there).  WAVE, WAVEH in air above
+C  2000 A, or in vacuum with HLINOP_SET_MEDIUM(0), as in HLINOP.
 C
       REAL*8 WAVEH,WAVE,WCON,REDCUT,BLUECUT
       REAL*8 EHYD(100),CONTH(100),WCUT(100)
       REAL*8 VACAIR
+      INTEGER MEDIUM_AIR
+      COMMON /HLMED/ MEDIUM_AIR
+      EXTERNAL HLCONVD
       LOGICAL FIRST
       SAVE
       DATA FIRST/.TRUE./
@@ -240,7 +249,7 @@ C
       HLCUT = 1.
       IF (WAVE.GE.WAVEH) THEN
          REDCUT = WCUT(NBLO)
-         IF (NBLO.NE.1) REDCUT = VACAIR(REDCUT)
+         IF ((NBLO.NE.1).AND.(MEDIUM_AIR.EQ.1)) REDCUT = VACAIR(REDCUT)
          IF (WAVE.GT.REDCUT) THEN
             IF (NBUP-NBLO.EQ.1) THEN
                HLCUT = DEXP((REDCUT-WAVE)*1.D-2)
@@ -250,7 +259,7 @@ C
          ENDIF
       ELSE
          BLUECUT = 1.D8/CONTH(NBLO)
-         IF (NBLO.NE.1) BLUECUT = VACAIR(BLUECUT)
+         IF ((NBLO.NE.1).AND.(MEDIUM_AIR.EQ.1)) BLUECUT=VACAIR(BLUECUT)
          IF (WAVE.LT.BLUECUT) HLCUT = 0.
       END IF
       RETURN
@@ -1454,8 +1463,28 @@ C
       END
 
 C***********************************************************************
+      SUBROUTINE HLINOP_SET_MEDIUM(IAIR)
+C
+C  Wavelength medium of WAVE and WAVEH in HLINOP, HLCUT, HBOP (and the
+C  line list of HBOP_AUTO): IAIR = 1 (default): air above 2000 A, 
+C  vacuum below (Lyman lines always in vacuum); IAIR = 0: vacuum at all
+C  wavelengths.  Line profiles are computed relative to WAVEH and are 
+C  the same in both; the medium sets where the series limits, red cuts
+C  and bound-free edges fall.
+C
+      INTEGER IAIR
+      INTEGER MEDIUM_AIR
+      COMMON /HLMED/ MEDIUM_AIR
+      EXTERNAL HLCONVD
+      IF ((IAIR.NE.0).AND.(IAIR.NE.1))
+     *  STOP 'HLINOP_SET_MEDIUM: IAIR must be 0 (vacuum) or 1 (air)'
+      MEDIUM_AIR = IAIR
+      RETURN
+      END
+
+C***********************************************************************
       BLOCK DATA HLCONVD
-C  Default: convolved profiles; no cache clearing requested.
+C  Default: convolved profiles; no cache clearing requested; air.
       INTEGER CONVOLUTION_MODE
       COMMON /HLCONV/ CONVOLUTION_MODE
       INTEGER NCLEAR
@@ -1463,9 +1492,12 @@ C  Default: convolved profiles; no cache clearing requested.
       COMPLEX*16 TW(0:16384)
       LOGICAL TWOK
       COMMON /HLTWC/ TW,TWOK
+      INTEGER MEDIUM_AIR
+      COMMON /HLMED/ MEDIUM_AIR
       DATA CONVOLUTION_MODE /1/
       DATA NCLEAR /0/
       DATA TWOK /.FALSE./
+      DATA MEDIUM_AIR /1/
       END
 
 C***********************************************************************
