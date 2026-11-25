@@ -227,9 +227,10 @@ def files(stehle_path, calls, messages=None, raw=False):
 
 
 def hbop_bf(nh, nhe, ne, T, waves):
-    """HBOP_LEVELS and HBOP_BF against HBOP's continuum: (sum NLTE / NH, W(1), W(15)) and an array of
-    (CONTIN from HBOP, HBOP_BF) per wavelength."""
+    """HBOP_LEVELS, HBOP_BF and HBOP_BF_DISSOLVED against HBOP's continuum: (sum NLTE / NH, W(1),
+    W(15)) and an array of (CONTIN from HBOP, HBOP_BF, HBOP_BF_DISSOLVED to n = 15, to n = 4) per
+    wavelength."""
     txt = "%.8e %.8e %.8e %.8e\n" % (nh, nhe, ne, T) + "".join("%.10f\n" % w for w in waves)
     out = run("drv_hbopbf", txt)
-    return out[0], out[1:, 1:]
+    return out[0][:3], out[1:, 1:]
 

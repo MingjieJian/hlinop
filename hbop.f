@@ -25,7 +25,8 @@ C
 C  REAL HBOP(WAVE,N,NLO,NUP,WAVEH,NH,NHE,NE,T,DOP,NPOP,NL,TOTAL,CONTIN)   
 C  SUBROUTINE HBOP_LEVELS(NH,NHE,NE,T,NLEV,W,NLTE)
 C  SUBROUTINE HBOP_BF(WAVE,NH,NHE,NE,T,W,NP,NLTE,CONTIN)
-C  SUBROUTINE HBOPLV, HBOPBF, HBOPEN (internal)
+C  SUBROUTINE HBOP_BF_DISSOLVED(WAVE,NH,NHE,NE,T,W,NP,NLTE,NBFMAX,CONTIN)
+C  SUBROUTINE HBOPLV, HBOPBF, HBOPBX, HBOPEN (internal)
 C  REAL FUNCTION WCALC(NH, NE, NHW, NS, TEMP)	
 C  SUBROUTINE HBOP_SET_EXCLUDED_VOLUME(SCALE)
 C  SUBROUTINE HBOP_SET_LINE_PROFILE(MODE)
@@ -299,6 +300,30 @@ C
       END
 
 C***********************************************************************
+      SUBROUTINE HBOP_BF_DISSOLVED(WAVE, NH, NHE, NE, T, W, NP, NLTE,
+     *                             NBFMAX, CONTIN)
+C
+C  The dissolved-level (pseudo-continuum) part of HBOP_BF only: the 
+C  absorption from the levels n = 1..NBFMAX (<= 15) for which WAVE lies
+C  redward of their bound-free edge, where it goes into the dissolved 
+C  upper states, weighted by 1 - w(n*)/w(n) (cm-1).  For codes that 
+C  already have the ordinary bound-free opacity above the edges (e.g. 
+C  Kurucz's HOP, explicit for n = 1-8): adding this part gives the 
+C  occupation-probability continuum without counting anything twice.
+C  Arguments as HBOP_BF.
+C
+      IMPLICIT NONE
+      INTEGER NBFMAX
+      REAL NH, NHE, NE, T, NP(*), NLTE(*), CONTIN, K, KT
+      REAL*8 WAVE, W(*)
+      PARAMETER (K=1.38065E-16)
+      KT = K*T
+      CALL HBOPBX(WAVE, NH, NHE, NE, T, KT, W, NP, NLTE, NBFMAX, 1,
+     *            CONTIN)
+      RETURN
+      END
+
+C***********************************************************************
       SUBROUTINE HBOPLV(NH, NHE, NE, T, W, G, NLTE)
 C
 C  Occupation probabilities, statistical weights and LTE populations of
@@ -332,7 +357,24 @@ C  Bound-free sum over the NBF lowest levels (internal; HBOP, HBOP_BF).
 C  KT: k times the temperature of the populations NLTE.
 C
       IMPLICIT NONE
-      INTEGER NBF, NLEVELS, I
+      INTEGER NBF
+      PARAMETER (NBF = 15)
+      REAL NH, NHE, NE, T, KT, NP(*), NLTE(*), CONTIN
+      REAL*8 WAVE, W(*)
+      CALL HBOPBX(WAVE, NH, NHE, NE, T, KT, W, NP, NLTE, NBF, 0, CONTIN)
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HBOPBX(WAVE, NH, NHE, NE, T, KT, W, NP, NLTE, NBFMAX,
+     *                  IPART, CONTIN)
+C
+C  Bound-free sum over the levels 1..NBFMAX (<= 15) (internal).  
+C  IPART = 0: all of it; IPART = 1: only the dissolved-level part, i.e.
+C  levels for which WAVE lies redward of their edge (HBOP_BF_DISSOLVED).
+C
+      IMPLICIT NONE
+      INTEGER NBF, NLEVELS, I, NBFMAX, IPART
       PARAMETER (NBF = 15, NLEVELS = 100)
       REAL NH, NHE, NE, T, KT, NP(*), NLTE(*), CONTIN, CHI, X
       REAL H, C, HC, HBF
@@ -346,7 +388,9 @@ C  The continuum is computed in vacuum wavelengths; WAVE is in air
 C  above 2000 A (as for the lines, see HLINOP)
       WAVEV = WAVE
       IF (WAVE.GT.2000.D0) WAVEV = AIRVAC(WAVE)
-      DO 40 I = 1, NBF
+      IF ((NBFMAX.LT.1).OR.(NBFMAX.GT.NBF))
+     *  STOP 'HBOP_BF_DISSOLVED: NBFMAX must be 1-15'
+      DO 40 I = 1, NBFMAX
 C
 C  Compute dissolved fraction for the wavelength for this lower level
 C
@@ -377,6 +421,7 @@ C  Far redward of the alpha line the taper underflows to 0 while the
 C  extrapolated cross section HBF may overflow (0 * Inf = NaN beyond 
 C  about 5 micron before Nov 2026): skip such levels
       CHI = 0.
+      IF ((IPART.EQ.1).AND.(X.LE.0.)) GOTO 40
       IF (TAPER.GT.1.D-30) CHI = (NP(I) - NLTE(I)*DEXP(-HC/(WAVEV*1E-8)
      *       /KT)) * D * HBF(WAVEV, I) * TAPER
 CC      ENDIF
