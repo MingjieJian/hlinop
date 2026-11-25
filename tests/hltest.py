@@ -30,6 +30,8 @@ PROGRAMS = {
     "drv_hlinprof": ["hlinprof.f", "hlinop.f"],
     "drv_nstar": ["hbop.f", "hlinprof.f", "hlinop.f"],
     "drv_hbop_auto": ["hbop_auto.f", "hbop.f", "hlinprof.f", "hlinop.f"],
+    "drv_states": ["hlinprof.f", "hlinop.f"],
+    "drv_hlckey": ["hlinop.f"],
 }
 DATA = {"HFILE": "stehle_long.dat", "HSELFFILE": "bpo_self.grid.DEC", "HVCSFILE": "vcsbalmer.dat"}
 
@@ -194,3 +196,17 @@ def hbop_auto(nmax, nh, nhe, ne, T, dop, waves):
             continue
     a = np.array([x for x in rows if x]).reshape(-1, 3)
     return a[:, 1], a[:, 2], r.stderr + r.stdout
+
+
+def states(calls):
+    """calls: iterable of (nlo, nup, wave0, T, ne, nh, nhe, dop, wave), evaluated in this order in
+    one process.  Returns HLINPROF (per A) and HLINOP (per Hz)."""
+    txt = "".join("%d %d %.10f %.6e %.6e %.6e %.6e %.6e %.10f\n" % c for c in calls)
+    out = run("drv_states", txt)
+    return out[:, 0], out[:, 1]
+
+
+def hlckey(keys):
+    """The cache index HLCKEY (16 hash slots, 12 entries): (entry, hit, number used) for each key."""
+    return run("drv_hlckey", "".join("%.17g\n" % k for k in keys)).astype(int)
+

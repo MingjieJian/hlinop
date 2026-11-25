@@ -24,7 +24,11 @@ C  REAL*8 FUNCTION HLYAFW(WAVE,XNE,H1FRC)
 C  REAL FUNCTION STARK1L(N,M,WAVE,WAVEH,T,XNE)
 C  SUBROUTINE STARK1PARTS(N,M,WAVE,WAVEH,T,XNE,PQ,PE,PF,GAMO,SB)
 C  SUBROUTINE HLFFT(A,NN,ISIGN)
+C  SUBROUTINE HLRFFT(R,C,N,ISIGN,Z)
+C  SUBROUTINE HLTWIN
+C  SUBROUTINE HLCKEY(KEY,NK,KEYS,NSLOT,IDX,NENT,NUSED,IGEN,IE,HIT)
 C  SUBROUTINE HLINOP_SET_CONVOLUTION(MODE)
+C  SUBROUTINE HLINOP_CLEAR_CACHE
 C  BLOCK DATA HLCONVD
 C  REAL FUNCTION HFNM(N,M)
 C  REAL FUNCTION VCSE1F(X)
@@ -865,42 +869,49 @@ C  Stark: STARK1.  The Doppler and Lorentz parts enter through their
 C  analytic Fourier transforms, so they may be arbitrarily narrow; the 
 C  Stark profile is sampled on a uniform frequency grid and the product
 C  is transformed back by FFT.  Done once per (N, M, WAVEH, T, XNE, 
-C  DOPPH, HWLOR) and cached (NSLOT states) on a logarithmic grid for 
-C  |dnu| <= RC (40 widths, at most 0.15 nu0); beyond RC the Stark 
-C  profile and the classical Lorentz profile of HPROFL are added.
+C  DOPPH, HWLOR) and cached on a logarithmic grid for |dnu| <= RC (40 
+C  widths, at most 0.15 nu0); beyond RC the Stark profile and the 
+C  classical Lorentz profile of HPROFL are added.  The cache holds up 
+C  to NENT = 3/4 NSLOT states (hash index HLCKEY, stored densely); it
+C  is emptied when full.
 C
       IMPLICIT NONE
       INTEGER N,M,IFINS
       REAL*8 WAVE,WAVEH,FINEST(*),FINSWT(*)
       REAL T,XNE,DOPPH,HWLOR
-      INTEGER NSLOT,NOUT,NMAXG,NFFT
-      PARAMETER (NSLOT=128, NOUT=1200, NMAXG=8191, NFFT=32768)
+      INTEGER NSLOT,NOUT,NMAXG,NFFT,NK
+      INTEGER NENT
+      PARAMETER (NSLOT=8192, NOUT=1200, NMAXG=8191, NFFT=32768, NK=7,
+     *           NENT=3*NSLOT/4)
       REAL*8 CLIGHT,PI
       PARAMETER (CLIGHT=2.9979258D18, PI=3.14159265358979D0)
-      INTEGER KN(NSLOT),KM(NSLOT),NEXT,IS,I,J,K,NG,NH,NF
-      REAL*8 KW(NSLOT),KT(NSLOT),KNE(NSLOT),KD(NSLOT),KL(NSLOT)
-      REAL*8 RCS(NSLOT),FNMS(NSLOT)
-      REAL*8 XO(NOUT,NSLOT),YB(NOUT,NSLOT),YR(NOUT,NSLOT),Y0(NSLOT)
+      INTEGER NUSED,IGEN,IS,I,J,K,NG,NH,NF,IDX(NSLOT)
+      LOGICAL HIT
+      REAL*8 KEY(NK),KEYS(NK,NENT),LHS(NENT),LRCS(NENT)
+      REAL*8 RCS(NENT),FNMS(NENT),Y0(NENT),XO
+      REAL YB(NOUT,NENT),YR(NOUT,NENT)
       REAL*8 CV(NMAXG)
-      COMPLEX*16 FA(NFFT),GH
+      REAL*8 RA(NFFT)
+      COMPLEX*16 CS(NFFT/2+1),ZW(NFFT/2),GH
       REAL*8 FREQNM,FREQ,DEL,DOP,HHW,WS,W,WMIN,RC,G,H,X,AK,SW
       REAL*8 PQ,PE,PF,GAM0,SB,R,WW,YL,YH,PHI,AD,HHWF,XSELF
       REAL*8 SUMS,TAILS
       REAL STARK1
       SAVE
-      DATA KN/NSLOT*0/, KM/NSLOT*0/, NEXT/1/
+      DATA IDX/NSLOT*0/, NUSED/0/, IGEN/0/
 C
-      DO 10 IS = 1, NSLOT
-        IF ((KN(IS).EQ.N).AND.(KM(IS).EQ.M).AND.(KW(IS).EQ.WAVEH)
-     *      .AND.(KT(IS).EQ.DBLE(T)).AND.(KNE(IS).EQ.DBLE(XNE))
-     *      .AND.(KD(IS).EQ.DBLE(DOPPH)).AND.(KL(IS).EQ.DBLE(HWLOR)))
-     *      GOTO 50
-   10 CONTINUE
+      KEY(1) = DBLE(N)
+      KEY(2) = DBLE(M)
+      KEY(3) = WAVEH
+      KEY(4) = DBLE(T)
+      KEY(5) = DBLE(XNE)
+      KEY(6) = DBLE(DOPPH)
+      KEY(7) = DBLE(HWLOR)
+      CALL HLCKEY(KEY,NK,KEYS,NSLOT,IDX,NENT,NUSED,IGEN,IS,HIT)
+      IF (HIT) GOTO 50
 C
 C  Build.  Widths (Hz): Stark from the Holtsmark and impact scales.
 C
-      IS = NEXT
-      NEXT = MOD(NEXT,NSLOT) + 1
       FREQNM = CLIGHT/WAVEH
       DOP = DBLE(DOPPH)*FREQNM
       HHW = DBLE(HWLOR)*FREQNM
@@ -926,67 +937,63 @@ C  component is extremely narrow)
       IF (NF.LT.4*NG) GOTO 15
       IF (NF.GT.NFFT) STOP 'HPCONV: NFFT too small'
       DO 20 I = 1, NF
-        FA(I) = (0.D0,0.D0)
+        RA(I) = 0.D0
    20 CONTINUE
 C  Stark profile on the grid (dnu = (I-NH-1)*H)
       DO 21 I = 1, NG
         X = DBLE(I-NH-1)*H
-        FA(I) = DCMPLX(DBLE(STARK1(N,M,CLIGHT/(FREQNM+X),WAVEH,T,XNE)),
-     *                 0.D0)
+        RA(I) = DBLE(STARK1(N,M,CLIGHT/(FREQNM+X),WAVEH,T,XNE))
    21 CONTINUE
 C  discrete normalisation: the sampled Stark profile gets its area 
 C  inside the grid (1 minus the far wings, ~dnu**-2.5), also when it 
 C  is narrower than the grid step
       SUMS = 0.D0
       DO 26 I = 1, NG
-        SUMS = SUMS + DBLE(FA(I))
+        SUMS = SUMS + RA(I)
    26 CONTINUE
       SUMS = SUMS*H
-      TAILS = 2.D0/3.D0*(DBLE(FA(1))+DBLE(FA(NG)))*G
+      TAILS = 2.D0/3.D0*(RA(1)+RA(NG))*G
       IF (SUMS.GT.0.D0) THEN
         DO 27 I = 1, NG
-          FA(I) = FA(I)*MAX(1.D0-TAILS,0.D0)/SUMS
+          RA(I) = RA(I)*MAX(1.D0-TAILS,0.D0)/SUMS
    27   CONTINUE
       ENDIF
-      CALL HLFFT(FA,NF,1)
+      CALL HLRFFT(RA,CS,NF,1,ZW)
 C  multiply by the transforms of the Doppler and Lorentz profiles
       SW = 0.D0
       DO 22 J = 1, IFINS
         SW = SW + FINSWT(J)
    22 CONTINUE
-      DO 25 I = 1, NF
+C  (k >= 0; the k < 0 half is the complex conjugate)
+      DO 25 I = 1, NF/2+1
         K = I - 1
-        IF (K.GE.NF/2) K = K - NF
         AK = DBLE(K)/(DBLE(NF)*H)
         GH = (0.D0,0.D0)
         DO 23 J = 1, IFINS
           GH = GH + FINSWT(J)*EXP(DCMPLX(0.D0,-2.D0*PI*AK*FINEST(J)))
    23   CONTINUE
         GH = GH/SW*EXP(-(PI*DOP*AK)**2 - 2.D0*PI*HHW*ABS(AK))
-        FA(I) = FA(I)*GH
+        CS(I) = CS(I)*GH
    25 CONTINUE
-      CALL HLFFT(FA,NF,-1)
+      CALL HLRFFT(RA,CS,NF,-1,ZW)
       DO 30 I = 1, NG
-        CV(I) = MAX(DBLE(FA(I))/DBLE(NF), 0.D0)
+        CV(I) = MAX(RA(I)/DBLE(NF), 0.D0)
    30 CONTINUE
 C  store on a log grid of |dnu| from H to RC; YB: dnu > 0 (blue), 
 C  YR: dnu < 0 (red)
       Y0(IS) = CV(NH+1)
       DO 40 K = 1, NOUT
-        XO(K,IS) = H*(RC/H)**(DBLE(K-1)/DBLE(NOUT-1))
-        R = XO(K,IS)/H
+        XO = H*(RC/H)**(DBLE(K-1)/DBLE(NOUT-1))
+        R = XO/H
         I = INT(R)
         WW = R - DBLE(I)
-        YB(K,IS) = LOG(MAX((1.D0-WW)*CV(NH+1+I)+WW*CV(NH+2+I),1.D-300))
-        YR(K,IS) = LOG(MAX((1.D0-WW)*CV(NH+1-I)+WW*CV(NH-I),1.D-300))
+        YB(K,IS) = REAL((1.D0-WW)*LOG(MAX(CV(NH+1+I),1.D-300))+WW*
+     *            LOG(MAX(CV(NH+2+I),1.D-300)))
+        YR(K,IS) = REAL((1.D0-WW)*LOG(MAX(CV(NH+1-I),1.D-300))+WW*
+     *            LOG(MAX(CV(NH-I),1.D-300)))
    40 CONTINUE
-      KN(IS) = N
-      KM(IS) = M
-      KW(IS) = WAVEH
-      KT(IS) = DBLE(T)
-      KNE(IS) = DBLE(XNE)
-      KD(IS) = DBLE(DOPPH)
-      KL(IS) = DBLE(HWLOR)
+      LHS(IS) = LOG(H)
+      LRCS(IS) = LOG(RC)
       RCS(IS) = RC
       FNMS(IS) = FREQNM
 C
@@ -996,24 +1003,23 @@ C
       DEL = FREQ - FNMS(IS)
       AD = ABS(DEL)
       IF (AD.LE.RCS(IS)) THEN
-        IF (AD.LT.XO(1,IS)) THEN
+        IF (AD.LT.EXP(LHS(IS))) THEN
           IF (DEL.GE.0.D0) THEN
-            YH = EXP(YB(1,IS))
+            YH = EXP(DBLE(YB(1,IS)))
           ELSE
-            YH = EXP(YR(1,IS))
+            YH = EXP(DBLE(YR(1,IS)))
           ENDIF
-          PHI = Y0(IS) + (YH-Y0(IS))*AD/XO(1,IS)
+          PHI = Y0(IS) + (YH-Y0(IS))*AD/EXP(LHS(IS))
         ELSE
-          R = 1.D0 + DBLE(NOUT-1)*LOG(AD/XO(1,IS))/
-     *        LOG(XO(NOUT,IS)/XO(1,IS))
+          R = 1.D0 + DBLE(NOUT-1)*(LOG(AD)-LHS(IS))/(LRCS(IS)-LHS(IS))
           K = MIN(INT(R),NOUT-1)
-          WW = (LOG(AD)-LOG(XO(K,IS)))/(LOG(XO(K+1,IS))-LOG(XO(K,IS)))
+          WW = R - DBLE(K)
           IF (DEL.GE.0.D0) THEN
-            YL = YB(K,IS)
-            YH = YB(K+1,IS)
+            YL = DBLE(YB(K,IS))
+            YH = DBLE(YB(K+1,IS))
           ELSE
-            YL = YR(K,IS)
-            YH = YR(K+1,IS)
+            YL = DBLE(YR(K,IS))
+            YH = DBLE(YR(K+1,IS))
           ENDIF
           PHI = EXP((1.D0-WW)*YL + WW*YH)
         ENDIF
@@ -1071,40 +1077,45 @@ C  a uniform wavelength grid by FFT (half-width 2*RC, RC = 40 times the
 C  larger of the Holtsmark and impact widths, at most 0.15 WAVEH) and
 C  stored on a logarithmic grid for |dlambda| <= RC; beyond RC the 
 C  normalised parts are added (the convolution of two normalised 
-C  profiles tends to their sum in the far wings).  NSLOT states are
-C  cached (round robin).
+C  profiles tends to their sum in the far wings).  The cache holds up 
+C  to NENT = 3/4 NSLOT states (hash index HLCKEY, stored densely); it
+C  is emptied when full.
 C
       IMPLICIT NONE
       INTEGER N,M
       REAL*8 WAVE,WAVEH
       REAL T,XNE
-      INTEGER NSLOT,NOUT,NMAXG,NFFT
-      PARAMETER (NSLOT=128, NOUT=1200, NMAXG=8191, NFFT=16384)
+      INTEGER NSLOT,NOUT,NMAXG,NFFT,NK
+      INTEGER NENT
+      PARAMETER (NSLOT=8192, NOUT=1200, NMAXG=8191, NFFT=16384, NK=5,
+     *           NENT=3*NSLOT/4)
       REAL*8 CA
       PARAMETER (CA=2.99792458D18)
-      INTEGER KN(NSLOT),KM(NSLOT),NEXT,IS,I,K,NG,NH,NF
-      REAL*8 KW(NSLOT),KT(NSLOT),KNE(NSLOT)
-      REAL*8 AQS(NSLOT),AES(NSLOT),RCS(NSLOT)
-      REAL*8 XO(NOUT,NSLOT),YB(NOUT,NSLOT),YR(NOUT,NSLOT),Y0(NSLOT)
+      INTEGER NUSED,IGEN,IS,I,K,NG,NH,NF,IDX(NSLOT)
+      LOGICAL HIT
+      REAL*8 KEY(NK),KEYS(NK,NENT),LHS(NENT),LRCS(NENT)
+      REAL*8 AQS(NENT),AES(NENT),RCS(NENT),Y0(NENT),XO
+      REAL YB(NOUT,NENT),YR(NOUT,NENT)
       REAL*8 Q(NMAXG),E(NMAXG),CV(NMAXG)
-      COMPLEX*16 FA(NFFT),FB(NFFT)
+      REAL*8 RA(NFFT),RB(NFFT)
+      COMPLEX*16 CS(NFFT/2+1),CT(NFFT/2+1),ZW(NFFT/2)
       REAL*8 PQ,PE,PF,GAM0,SB,WQ,WE,RC,H,G,X,AQ,AE,D,AD,FAC
       REAL*8 R,W,YL,YH,PHI
       SAVE
-      DATA KN/NSLOT*0/, KM/NSLOT*0/, NEXT/1/
+      DATA IDX/NSLOT*0/, NUSED/0/, IGEN/0/
 C
 C  Cached state?
 C
-      DO 10 IS = 1, NSLOT
-        IF ((KN(IS).EQ.N).AND.(KM(IS).EQ.M).AND.(KW(IS).EQ.WAVEH)
-     *      .AND.(KT(IS).EQ.DBLE(T)).AND.(KNE(IS).EQ.DBLE(XNE)))
-     *      GOTO 50
-   10 CONTINUE
+      KEY(1) = DBLE(N)
+      KEY(2) = DBLE(M)
+      KEY(3) = WAVEH
+      KEY(4) = DBLE(T)
+      KEY(5) = DBLE(XNE)
+      CALL HLCKEY(KEY,NK,KEYS,NSLOT,IDX,NENT,NUSED,IGEN,IS,HIT)
+      IF (HIT) GOTO 50
 C
 C  Build: widths from the parts at line centre
 C
-      IS = NEXT
-      NEXT = MOD(NEXT,NSLOT) + 1
       CALL STARK1PARTS(N,M,WAVEH,WAVEH,T,XNE,PQ,PE,PF,GAM0,SB)
       WQ = SB
       WE = MAX(GAM0,1.D-6)*SB
@@ -1140,37 +1151,36 @@ C  FFT convolution of the normalised parts
       IF (NF.LT.2*NG) GOTO 25
       IF (NF.GT.NFFT) STOP 'STARK1C: NFFT too small'
       DO 30 I = 1, NF
-        FA(I) = (0.D0,0.D0)
-        FB(I) = (0.D0,0.D0)
+        RA(I) = 0.D0
+        RB(I) = 0.D0
    30 CONTINUE
       DO 31 I = 1, NG
-        FA(I) = DCMPLX(Q(I)/AQ,0.D0)
-        FB(I) = DCMPLX(E(I)/AE,0.D0)
+        RA(I) = Q(I)/AQ
+        RB(I) = E(I)/AE
    31 CONTINUE
-      CALL HLFFT(FA,NF,1)
-      CALL HLFFT(FB,NF,1)
-      DO 32 I = 1, NF
-        FA(I) = FA(I)*FB(I)
+      CALL HLRFFT(RA,CS,NF,1,ZW)
+      CALL HLRFFT(RB,CT,NF,1,ZW)
+      DO 32 I = 1, NF/2+1
+        CS(I) = CS(I)*CT(I)
    32 CONTINUE
-      CALL HLFFT(FA,NF,-1)
+      CALL HLRFFT(RA,CS,NF,-1,ZW)
       DO 33 I = 1, NG
-        CV(I) = MAX(DBLE(FA(I+NH))*H/DBLE(NF), 0.D0)
+        CV(I) = MAX(RA(I+NH)*H/DBLE(NF), 0.D0)
    33 CONTINUE
 C  store on a log grid of |dlambda| from H to RC, both sides
       Y0(IS) = CV(NH+1)
       DO 40 K = 1, NOUT
-        XO(K,IS) = H*(RC/H)**(DBLE(K-1)/DBLE(NOUT-1))
-        R = XO(K,IS)/H
+        XO = H*(RC/H)**(DBLE(K-1)/DBLE(NOUT-1))
+        R = XO/H
         I = INT(R)
         W = R - DBLE(I)
-        YR(K,IS) = LOG(MAX((1.D0-W)*CV(NH+1+I)+W*CV(NH+2+I),1.D-300))
-        YB(K,IS) = LOG(MAX((1.D0-W)*CV(NH+1-I)+W*CV(NH-I),1.D-300))
+        YR(K,IS) = REAL((1.D0-W)*LOG(MAX(CV(NH+1+I),1.D-300))+W*
+     *            LOG(MAX(CV(NH+2+I),1.D-300)))
+        YB(K,IS) = REAL((1.D0-W)*LOG(MAX(CV(NH+1-I),1.D-300))+W*
+     *            LOG(MAX(CV(NH-I),1.D-300)))
    40 CONTINUE
-      KN(IS) = N
-      KM(IS) = M
-      KW(IS) = WAVEH
-      KT(IS) = DBLE(T)
-      KNE(IS) = DBLE(XNE)
+      LHS(IS) = LOG(H)
+      LRCS(IS) = LOG(RC)
       AQS(IS) = AQ
       AES(IS) = AE
       RCS(IS) = RC
@@ -1180,24 +1190,23 @@ C
    50 D = WAVE - WAVEH
       AD = ABS(D)
       IF (AD.LE.RCS(IS)) THEN
-        IF (AD.LT.XO(1,IS)) THEN
+        IF (AD.LT.EXP(LHS(IS))) THEN
           IF (D.GE.0.D0) THEN
-            YH = EXP(YR(1,IS))
+            YH = EXP(DBLE(YR(1,IS)))
           ELSE
-            YH = EXP(YB(1,IS))
+            YH = EXP(DBLE(YB(1,IS)))
           ENDIF
-          PHI = Y0(IS) + (YH-Y0(IS))*AD/XO(1,IS)
+          PHI = Y0(IS) + (YH-Y0(IS))*AD/EXP(LHS(IS))
         ELSE
-          R = 1.D0 + DBLE(NOUT-1)*LOG(AD/XO(1,IS))/
-     *        LOG(XO(NOUT,IS)/XO(1,IS))
+          R = 1.D0 + DBLE(NOUT-1)*(LOG(AD)-LHS(IS))/(LRCS(IS)-LHS(IS))
           K = MIN(INT(R),NOUT-1)
-          W = (LOG(AD)-LOG(XO(K,IS)))/(LOG(XO(K+1,IS))-LOG(XO(K,IS)))
+          W = R - DBLE(K)
           IF (D.GE.0.D0) THEN
-            YL = YR(K,IS)
-            YH = YR(K+1,IS)
+            YL = DBLE(YR(K,IS))
+            YH = DBLE(YR(K+1,IS))
           ELSE
-            YL = YB(K,IS)
-            YH = YB(K+1,IS)
+            YL = DBLE(YB(K,IS))
+            YH = DBLE(YB(K+1,IS))
           ENDIF
           PHI = EXP((1.D0-W)*YL + W*YH)
         ENDIF
@@ -1210,16 +1219,89 @@ C
       END
 
 C***********************************************************************
-      SUBROUTINE HLFFT(A,NN,ISIGN)
+      SUBROUTINE HLCKEY(KEY,NK,KEYS,NSLOT,IDX,NENT,NUSED,IGEN,IE,HIT)
 C
-C  In-place radix-2 complex FFT, NN a power of 2.  ISIGN = 1: forward
-C  (exp(-i...)), ISIGN = -1: inverse without the 1/NN factor.
+C  Cache index for STARK1C, HPCONV and HLPCONV.  The cached states are
+C  stored densely as entries 1..NUSED (at most NENT); IDX(NSLOT) is an 
+C  open-addressing hash table of entry numbers (0 = empty slot), with 
+C  NENT <= 3/4 NSLOT.  KEYS(NK,NENT) holds the state of each entry.
+C  Returns the entry IE of the state KEY(1..NK) and HIT = .TRUE. if it
+C  is stored; otherwise IE is a new entry, with KEY stored, which the 
+C  caller fills.  When all NENT entries are used the cache is emptied 
+C  first.  IGEN (kept by the caller) is compared with the count of 
+C  HLINOP_CLEAR_CACHE calls; if they differ the cache is emptied.  A model atmosphere needs (lines) x (depths) entries, so NENT
+C  must be well above that, or every call rebuilds.  Memory is taken 
+C  only for the entries used.
 C
       IMPLICIT NONE
-      INTEGER NN,ISIGN,I,J,K,M,MMAX,ISTEP
-      COMPLEX*16 A(NN),TMP,WP,W
-      REAL*8 THETA,PI2
-      PARAMETER (PI2=6.283185307179586D0)
+      INTEGER NK,NSLOT,NENT,NUSED,IGEN,IE,IS,I,J
+      INTEGER IDX(NSLOT)
+      REAL*8 KEY(NK),KEYS(NK,NENT)
+      LOGICAL HIT
+      INTEGER*8 HB,IB,MASK
+      PARAMETER (MASK=2147483647)
+      INTEGER NCLEAR
+      COMMON /HLCCLR/ NCLEAR
+      EXTERNAL HLCONVD
+      IF (IGEN.NE.NCLEAR) THEN
+        DO 5 J = 1, NSLOT
+          IDX(J) = 0
+    5   CONTINUE
+        NUSED = 0
+        IGEN = NCLEAR
+      ENDIF
+      HB = 0
+      DO 10 J = 1, NK
+        IB = TRANSFER(KEY(J),IB)
+        HB = IEOR(ISHFTC(HB,17),IB)
+   10 CONTINUE
+      HB = IEOR(HB,ISHFT(HB,-31))
+      HB = IEOR(HB,ISHFT(HB,-17))
+   15 IS = INT(MOD(IAND(HB,MASK),INT(NSLOT,8))) + 1
+      DO 30 I = 1, NSLOT
+        IE = IDX(IS)
+        IF (IE.EQ.0) THEN
+          IF (NUSED.GE.NENT) THEN
+            DO 20 J = 1, NSLOT
+              IDX(J) = 0
+   20       CONTINUE
+            NUSED = 0
+            GOTO 15
+          ENDIF
+          NUSED = NUSED + 1
+          IE = NUSED
+          IDX(IS) = IE
+          DO 25 J = 1, NK
+            KEYS(J,IE) = KEY(J)
+   25     CONTINUE
+          HIT = .FALSE.
+          RETURN
+        ENDIF
+        DO 26 J = 1, NK
+          IF (KEYS(J,IE).NE.KEY(J)) GOTO 28
+   26   CONTINUE
+        HIT = .TRUE.
+        RETURN
+   28   IS = MOD(IS,NSLOT) + 1
+   30 CONTINUE
+      STOP 'HLCKEY: cache full'
+      END
+
+C***********************************************************************
+      SUBROUTINE HLFFT(A,NN,ISIGN)
+C
+C  In-place radix-2 complex FFT, NN a power of 2 (at most NTW).  
+C  ISIGN = 1: forward (exp(-i...)), ISIGN = -1: inverse without the 
+C  1/NN factor.  Twiddle factors from the table of HLTWIN.
+C
+      IMPLICIT NONE
+      INTEGER NN,ISIGN,I,J,K,L,M,MMAX,ISTEP,NTW,IST
+      PARAMETER (NTW=32768)
+      COMPLEX*16 A(NN),TMP,W,TW(0:NTW/2)
+      LOGICAL TWOK
+      COMMON /HLTWC/ TW,TWOK
+      IF (.NOT.TWOK) CALL HLTWIN
+      IF (NN.GT.NTW) STOP 'HLFFT: NN too large'
       J = 1
       DO 10 I = 1, NN
         IF (J.GT.I) THEN
@@ -1228,31 +1310,104 @@ C
           A(I) = TMP
         ENDIF
         M = NN/2
-    5   IF ((M.GE.2).AND.(J.GT.M)) THEN
+    6   IF ((M.GE.2).AND.(J.GT.M)) THEN
           J = J - M
           M = M/2
-          GOTO 5
+          GOTO 6
         ENDIF
         J = J + M
    10 CONTINUE
       MMAX = 1
    20 IF (NN.GT.MMAX) THEN
         ISTEP = 2*MMAX
-        THETA = -DBLE(ISIGN)*PI2/DBLE(ISTEP)
-        WP = DCMPLX(COS(THETA),SIN(THETA))
-        W = (1.D0,0.D0)
-        DO 40 M = 1, MMAX
-          DO 30 I = M, NN, ISTEP
-            K = I + MMAX
-            TMP = W*A(K)
-            A(K) = A(I) - TMP
-            A(I) = A(I) + TMP
+        IST = NTW/ISTEP
+        DO 40 I = 1, NN, ISTEP
+          DO 30 M = 0, MMAX-1
+            W = TW(M*IST)
+            IF (ISIGN.LT.0) W = DCONJG(W)
+            K = I + M
+            L = K + MMAX
+            TMP = W*A(L)
+            A(L) = A(K) - TMP
+            A(K) = A(K) + TMP
    30     CONTINUE
-          W = W*WP
    40   CONTINUE
         MMAX = ISTEP
         GOTO 20
       ENDIF
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HLRFFT(R,C,N,ISIGN,Z)
+C
+C  FFT of a real sequence by a complex FFT of half the length.  N a 
+C  power of 2 (4 <= N <= NTW).  Z: complex work array of N/2.
+C  ISIGN = 1:  R(1..N) real in, C(1..N/2+1) out: the spectrum 
+C              X(k) = sum_n x(n) exp(-2 pi i k n/N), k = 0..N/2
+C  ISIGN = -1: C(1..N/2+1) in (the k >= 0 half of a Hermitian 
+C              spectrum), R(1..N) out: sum_k X(k) exp(+2 pi i k n/N) 
+C              over all k, i.e. N times the inverse transform (as HLFFT)
+C
+      IMPLICIT NONE
+      INTEGER N,ISIGN,K,M,N2,NTW,IST
+      PARAMETER (NTW=32768)
+      REAL*8 R(N)
+      COMPLEX*16 C(N/2+1),Z(N/2),ZK,ZC,EV,OD,W
+      COMPLEX*16 TW(0:NTW/2)
+      LOGICAL TWOK
+      COMMON /HLTWC/ TW,TWOK
+      IF (.NOT.TWOK) CALL HLTWIN
+      IF (N.GT.NTW) STOP 'HLRFFT: N too large'
+      N2 = N/2
+      IST = NTW/N
+      IF (ISIGN.GT.0) THEN
+        DO 10 M = 1, N2
+          Z(M) = DCMPLX(R(2*M-1),R(2*M))
+   10   CONTINUE
+        CALL HLFFT(Z,N2,1)
+        DO 20 K = 0, N2
+          ZK = Z(MOD(K,N2)+1)
+          ZC = DCONJG(Z(MOD(N2-K,N2)+1))
+          EV = 0.5D0*(ZK+ZC)
+          OD = DCMPLX(0.D0,-0.5D0)*(ZK-ZC)
+          C(K+1) = EV + TW(K*IST)*OD
+   20   CONTINUE
+      ELSE
+        DO 30 K = 0, N2-1
+          ZK = C(K+1)
+          ZC = DCONJG(C(N2-K+1))
+          W = DCONJG(TW(K*IST))
+          Z(K+1) = (ZK+ZC) + DCMPLX(0.D0,1.D0)*(ZK-ZC)*W
+   30   CONTINUE
+        CALL HLFFT(Z,N2,-1)
+        DO 40 M = 1, N2
+          R(2*M-1) = DBLE(Z(M))
+          R(2*M) = DIMAG(Z(M))
+   40   CONTINUE
+      ENDIF
+      RETURN
+      END
+
+C***********************************************************************
+      SUBROUTINE HLTWIN
+C
+C  Twiddle factors exp(-2 pi i k/NTW), k = 0..NTW/2, for HLFFT and 
+C  HLRFFT (computed once).
+C
+      IMPLICIT NONE
+      INTEGER K,NTW
+      PARAMETER (NTW=32768)
+      COMPLEX*16 TW(0:NTW/2)
+      LOGICAL TWOK
+      COMMON /HLTWC/ TW,TWOK
+      REAL*8 PI2
+      PARAMETER (PI2=6.283185307179586D0)
+      DO 10 K = 0, NTW/2
+        TW(K) = DCMPLX(COS(PI2*DBLE(K)/DBLE(NTW)),
+     *                 -SIN(PI2*DBLE(K)/DBLE(NTW)))
+   10 CONTINUE
+      TWOK = .TRUE.
       RETURN
       END
 
@@ -1281,11 +1436,36 @@ C
       END
 
 C***********************************************************************
+C***********************************************************************
+      SUBROUTINE HLINOP_CLEAR_CACHE
+C
+C  Empties the caches of convolved profiles (STARK1C, HPCONV, HLPCONV)
+C  at their next call.  A synthesis code calls it when it starts a new
+C  model (or a new synthesis), so that the caches hold the states of 
+C  one model only: (lines) x (depths) x 9.6 kB.  Without it states of
+C  earlier models stay until a cache is full (6144 states, 59 MB per 
+C  routine).  The results do not change.
+C
+      INTEGER NCLEAR
+      COMMON /HLCCLR/ NCLEAR
+      EXTERNAL HLCONVD
+      NCLEAR = NCLEAR + 1
+      RETURN
+      END
+
+C***********************************************************************
       BLOCK DATA HLCONVD
-C  Default: convolved profiles.
+C  Default: convolved profiles; no cache clearing requested.
       INTEGER CONVOLUTION_MODE
       COMMON /HLCONV/ CONVOLUTION_MODE
+      INTEGER NCLEAR
+      COMMON /HLCCLR/ NCLEAR
+      COMPLEX*16 TW(0:16384)
+      LOGICAL TWOK
+      COMMON /HLTWC/ TW,TWOK
       DATA CONVOLUTION_MODE /1/
+      DATA NCLEAR /0/
+      DATA TWOK /.FALSE./
       END
 
 C***********************************************************************
