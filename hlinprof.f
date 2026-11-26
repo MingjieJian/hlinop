@@ -6,11 +6,14 @@ C    *                   H1FRC,HE1FRC,DOP,PROF)
 C     SUBROUTINE HLINPROF_SET_FILES(STEFILE,SELFFILE,VCSFILE)
 C     INTEGER FUNCTION HLINPROF_SOURCE()
 C     SUBROUTINE HLINPROF_SET_MESSAGES(MODE)
+C     SUBROUTINE HLINOP_SET_TB09(TBFILE,MODE,DLO,DHI)
 C     BLOCK DATA HLPRFD
 C     REAL*8 FUNCTION HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,...)
 C     REAL*8 FUNCTION HLPCONV(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,...)
 C     SUBROUTINE STEHLE(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN)
+C     SUBROUTINE STEHLS(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN,HLINM,IBOTH)
 C     SUBROUTINE STEHL2(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN,HLINM,IBOTH)
+C     SUBROUTINE HTB09P(LFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,PROF,VALID)
 C     REAL*8 FUNCTION STHPCH(XL,K,NA,AA,SS), STHPD(J,NA,AA,SS)
 C     SUBROUTINE HGRID(HFILE,WAVE,WAVE0,TEMP,NHYD,NLOW,NUP,HLIN)
 C     SUBROUTINE HSELF_PDWIDTH(NLOW,NUP,TEMP,H1FRC,WIDTH)
@@ -424,17 +427,71 @@ C
       END
 
 C***********************************************************************
+      SUBROUTINE HLINOP_SET_TB09(TBFILE,MODE,DLO,DHI)
+C
+C  Balmer lines H10-H22: blend the Stehle & Hutcheon profile with the
+C  TB09 profile of Tremblay & Bergeron (2009, ApJ 696, 1755; table of
+C  November 2015 as distributed with SYNSPEC, data/tremblay.dat, read
+C  unchanged by HTB09P).  TB09 includes the non-ideal (Hummer &
+C  Mihalas critical field) cut of the proton microfield and is
+C  tabulated ~0.5-1.5 dex beyond Stehle's last density (Inglis-Teller
+C  limit); it is meant to be used with the occupation probability of
+C  the charged perturbers.
+C  MODE = 0 (default): Stehle only.  MODE = 1: weight of TB09
+C     w = 3t**2 - 2t**3,  t = (log n_e - (L - DLO))/(DLO - DHI) in [0,1]
+C  with L = log10 of the line's last tabulated Stehle density, i.e.
+C  Stehle below L - DLO, TB09 above L - DHI (DLO > DHI >= 0, in dex).
+C  The profile is (1-w) Stehle + w TB09 (both of unit area).  Where
+C  TB09 has no value (outside its T, n_e grid) Stehle is used.
+C  TBFILE: SYNSPEC's tremblay.dat.  The table is read once, at the
+C  first blended profile (a later call with another file name does not
+C  reload it); a file that cannot be read stops the run.  The call
+C  empties the profile caches.
+C  Fit tests (Nov 2026; UVES metal-poor dwarfs and DESI turnoff stars,
+C  H10-H22): DLO = 2.0, DHI = 1.5 fitted best.
+C
+      CHARACTER*(*) TBFILE
+      INTEGER MODE
+      REAL DLO,DHI
+      INTEGER ITBMOD
+      COMMON /HLTB9N/ ITBMOD,TBLO,TBHI
+      CHARACTER*592 FTB09
+      COMMON /HLTB9F/ FTB09
+      EXTERNAL HLPRFD
+      IF (LEN(TBFILE).GT.592)
+     *  STOP 'HLINOP_SET_TB09: file name longer than 592 characters'
+      IF (MODE.NE.0 .AND. MODE.NE.1)
+     *  STOP 'HLINOP_SET_TB09: MODE must be 0 or 1'
+      IF (MODE.EQ.1 .AND. .NOT.(DLO.GT.DHI .AND. DHI.GE.0.))
+     *  STOP 'HLINOP_SET_TB09: need DLO > DHI >= 0'
+      ITBMOD = MODE
+      TBLO = DLO
+      TBHI = DHI
+      FTB09 = TBFILE
+C  the profile caches (HLPCONV) do not know the setting: empty them
+      CALL HLINOP_CLEAR_CACHE
+      RETURN
+      END
+
+C***********************************************************************
       BLOCK DATA HLPRFD
-C  No table files set at run time; no HLINPROF call yet; messages on.
+C  No table files set at run time; no HLINPROF call yet; messages on;
+C  no TB09 blending.
       CHARACTER*592 FSTE,FSELF,FVCS
       COMMON /HLFILN/ FSTE,FSELF,FVCS
       INTEGER NFSET,ISRC
       COMMON /HLFILC/ NFSET,ISRC
       INTEGER IMSG
       COMMON /HLMSG/ IMSG
+      INTEGER ITBMOD
+      COMMON /HLTB9N/ ITBMOD,TBLO,TBHI
+      CHARACTER*592 FTB09
+      COMMON /HLTB9F/ FTB09
       DATA FSTE,FSELF,FVCS /3*' '/
       DATA NFSET,ISRC /0,-1/
       DATA IMSG /1/
+      DATA ITBMOD,TBLO,TBHI /0,2.0,1.5/
+      DATA FTB09 /' '/
       END
 
       REAL*8 FUNCTION HLYAPRF(HFILE,WAVE,WAVE0,TEMP,XXNE,H1FRC,HE1FRC,
@@ -686,10 +743,15 @@ C
       END
 
 C***********************************************************************
-      SUBROUTINE STEHL2(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN,
+      SUBROUTINE STEHLS(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN,
      *                  HLINM,IBOTH)
 C
 C  N Piskunov's code to return Stehle Stark profiles
+C
+C  Nov 2026: called through STEHL2, which can blend the result with
+C  the TB09 profile (HLINOP_SET_TB09).  Sets ANESL (COMMON /HLSLIM/),
+C  log10 of the line's last tabulated density at the bracketing
+C  temperatures.
 C
 C  Nov 2026: reads the table built by tools/make_stehle_table.py from 
 C  the CDS catalogue J/A+AS/140/93 (format version 2: Lyman, Balmer 
@@ -746,6 +808,7 @@ C  the temperature and density part of the last call
      *     LF0A,LF0B
       INTEGER IMSG
       COMMON /HLMSG/ IMSG
+      COMMON /HLSLIM/ ANESL
       EXTERNAL HLPRFD
       DATA FIRST/.TRUE./,LINDEX/10000*0/,LLINE/0/
       EXP10(X)=EXP(2.30258509299405E0*X)
@@ -923,6 +986,7 @@ C  both bracketing temperatures.
         HLINM=-1.
         RETURN
       END IF
+      ANESL=XNE(JMAX)
       ANE=LOG10(XXNE)
       IF(ANE.LE.XNE(1).OR.JMAX.EQ.1) THEN
 C  Below the table (or only one density): first profile, in A
@@ -1062,6 +1126,266 @@ C
       IF(I.LE.0) I=LEN(HFILE)
       WRITE(*,*) 'ERROR: '//HFILE(1:I)//' is not a version-2 Stehle '//
      *           'table; build it with tools/make_stehle_table.py'
+      STOP
+      END
+
+      SUBROUTINE STEHL2(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN,
+     *                  HLINM,IBOTH)
+C
+C  Tabulated Stark profile (with thermal Doppler) of hydrogen lines:
+C  Stehle & Hutcheon (STEHLS), for the Balmer lines of the TB09 table
+C  (H10-H22) optionally blended with TB09 (HTB09P) from DLO dex below
+C  the line's last tabulated Stehle density upwards (HLINOP_SET_TB09;
+C  off by default).  Arguments as STEHLS.
+C
+      DOUBLE PRECISION WAVE,WAVE0
+      CHARACTER HFILE*(*)
+      INTEGER NLOW,NUP,IBOTH,IV
+      REAL TEMP,XXNE,HLIN,HLINM,HT,W,T
+      INTEGER ITBMOD
+      COMMON /HLTB9N/ ITBMOD,TBLO,TBHI
+      CHARACTER*592 FTB09
+      COMMON /HLTB9F/ FTB09
+      COMMON /HLSLIM/ ANESL
+      LOGICAL EX
+      INTEGER ITBCHK
+      SAVE ITBCHK
+      DATA ITBCHK /0/
+      EXTERNAL HLPRFD
+      CALL STEHLS(HFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HLIN,HLINM,IBOTH)
+      IF (ITBMOD.EQ.0) RETURN
+      IF (ITBCHK.EQ.0) THEN
+        ITBCHK = 1
+        INQUIRE(FILE=FTB09,EXIST=EX)
+        IF (.NOT.EX) THEN
+          WRITE(*,*) 'ERROR: HLINOP_SET_TB09: TB09 table not found: ',
+     *               FTB09(1:MAX(1,LEN_TRIM(FTB09)))
+          STOP
+        END IF
+      END IF
+      IF (HLIN.LT.0.) RETURN
+      IF (NLOW.NE.2 .OR. NUP.LT.10 .OR. NUP.GT.22) RETURN
+      T = (LOG10(XXNE) - (ANESL - TBLO))/(TBLO - TBHI)
+      T = MAX(0., MIN(1., T))
+      W = T*T*(3. - 2.*T)
+      IF (W.LE.0.) RETURN
+      CALL HTB09P(FTB09,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,HT,IV)
+      IF (IV.NE.1) RETURN
+C  TB09 depends on |WAVE - WAVE0| only: the same value at the mirror
+      HLIN = (1. - W)*HLIN + W*HT
+      IF (IBOTH.EQ.1) HLINM = (1. - W)*HLINM + W*HT
+      RETURN
+      END
+
+      SUBROUTINE HTB09P(LFILE,WAVE,WAVE0,TEMP,XXNE,NLOW,NUP,PROF,VALID)
+C
+C  TB09 Stark profile (Tremblay & Bergeron 2009) of the line NLOW-NUP,
+C  per Angstrom, unit area, at |WAVE - WAVE0|; Doppler-convolved at the
+C  table temperature like the Stehle table.  VALID = 0 if the line is
+C  not in the table or (T, n_e) is outside its grid.  LFILE: the table
+C  as distributed with SYNSPEC (data/tremblay.dat; November 2015
+C  version, Lemke 1997 format; Lyman 2-21, Balmer 3-22, Paschen 4-22,
+C  Brackett 5-14), read unchanged: number of blocks; per block the
+C  number of lines, a header per line (NL NU log alpha0 log ne0 log T0
+C  dlog alpha dlog ne dlog T MP MNE MT), then per line a label line
+C  'nl= NL nu= NU' and MNE*MT records (n_e outer, T inner), each the
+C  TB09 flag (Tremblay's README: 0 computed, non-zero not converged or
+C  copied from a neighbouring T or n_e) and MP values of log10 S(alpha)
+C  with alpha = dlambda/F0, F0 = 1.25e-9 n_e**(2/3) A (as SYNSPEC).
+C  The table is read once; a file that cannot be read stops the run.
+C  Interpolation: bilinear in log T, log n_e, linear in log alpha,
+C  alpha**-2.5 beyond the last point; the area is computed exactly per
+C  (T, n_e) and cached.  As the analysis version of HLINPROF
+C  (TB09_BALMER), which read a compact copy of the H10-H22 part.
+      IMPLICIT NONE
+      INTEGER MAXP,MAXNE,MAXT,MAXL,MAXC
+      PARAMETER (MAXP=60,MAXNE=17,MAXT=7,MAXL=80,MAXC=100)
+      CHARACTER*(*) LFILE
+      REAL*8 WAVE,WAVE0
+      REAL*4 TEMP,XXNE,PROF
+      INTEGER NLOW,NUP,VALID
+      INTEGER NLINE,NL(MAXL),NU(MAXL),MP(MAXL),MNE(MAXL),MT(MAXL)
+      INTEGER QFLAG(MAXNE,MAXT,MAXL)
+      REAL*8 LA0(MAXL),LNE0(MAXL),LT0(MAXL)
+      REAL*8 DLA(MAXL),DNE(MAXL),DT(MAXL)
+      REAL*8 LOGS(MAXP,MAXNE,MAXT,MAXL)
+      REAL*8 CTEMP(MAXC,MAXL),CNE(MAXC,MAXL),CNORM(MAXC,MAXL)
+      INTEGER NCACHE(MAXL)
+      LOGICAL FIRST,LOADED
+      INTEGER I,J,K,L,Q,IERR,IC,NBLK,NB,IB,LL,IN1,IN2,NL1,NU1
+      REAL*8 LOGT,LOGNE,WT,WN,X,XLAST,WA,Y1,Y2,Y
+      REAL*8 F0,ALPHA,NORM,SUM,A1,S1,SLOPE,RATIO,TERM,FLAG
+      CHARACTER*80 LABEL
+      SAVE NLINE,NL,NU,MP,MNE,MT,QFLAG,LA0,LNE0,LT0
+      SAVE DLA,DNE,DT,LOGS,FIRST,LOADED
+      SAVE CTEMP,CNE,CNORM,NCACHE
+      DATA FIRST/.TRUE./,LOADED/.FALSE./,NCACHE/MAXL*0/
+
+      VALID = 0
+      PROF = 0.
+      IF (FIRST) THEN
+        FIRST = .FALSE.
+        OPEN(96,FILE=LFILE,STATUS='OLD',FORM='FORMATTED',
+     *       ACTION='READ',IOSTAT=IERR)
+        IF (IERR.NE.0) GOTO 90
+        READ(96,*,IOSTAT=IERR) NBLK
+        IF ((IERR.NE.0).OR.(NBLK.LT.1)) GOTO 90
+        NLINE = 0
+        DO IB=1,NBLK
+          READ(96,*,IOSTAT=IERR) NB
+          IF ((IERR.NE.0).OR.(NB.LT.1).OR.(NLINE+NB.GT.MAXL)) GOTO 90
+          DO L=NLINE+1,NLINE+NB
+            READ(96,*,IOSTAT=IERR) NL(L),NU(L),LA0(L),LNE0(L),LT0(L),
+     *        DLA(L),DNE(L),DT(L),MP(L),MNE(L),MT(L)
+            IF (IERR.NE.0) GOTO 90
+            IF ((MP(L).LT.2).OR.(MP(L).GT.MAXP).OR.(MNE(L).LT.2).OR.
+     *          (MNE(L).GT.MAXNE).OR.(MT(L).LT.2).OR.
+     *          (MT(L).GT.MAXT)) GOTO 90
+          ENDDO
+          DO L=NLINE+1,NLINE+NB
+C  label line 'nl= NL nu= NU' (blank lines skipped): must match header
+            LABEL = ' '
+            DO LL=1,1000
+              READ(96,'(A)',IOSTAT=IERR) LABEL
+              IF (IERR.NE.0) GOTO 90
+              IF (LEN_TRIM(LABEL).GT.0) GOTO 20
+            ENDDO
+            GOTO 90
+   20       IN1 = INDEX(LABEL,'nl=')
+            IN2 = INDEX(LABEL,'nu=')
+            IF ((IN1.EQ.0).OR.(IN2.LE.IN1)) GOTO 90
+            READ(LABEL(IN1+3:IN2-1),*,IOSTAT=IERR) NL1
+            IF (IERR.NE.0) GOTO 90
+            READ(LABEL(IN2+3:),*,IOSTAT=IERR) NU1
+            IF ((IERR.NE.0).OR.(NL1.NE.NL(L)).OR.(NU1.NE.NU(L)))
+     *        GOTO 90
+            DO J=1,MNE(L)
+              DO I=1,MT(L)
+                READ(96,*,IOSTAT=IERR) FLAG,(LOGS(K,J,I,L),K=1,MP(L))
+                IF (IERR.NE.0) GOTO 90
+                QFLAG(J,I,L) = NINT(FLAG)
+              ENDDO
+            ENDDO
+          ENDDO
+          NLINE = NLINE + NB
+        ENDDO
+        CLOSE(96)
+        LOADED = .TRUE.
+      ENDIF
+      IF (.NOT.LOADED) RETURN
+
+      L = 0
+      DO Q=1,NLINE
+        IF ((NL(Q).EQ.NLOW).AND.(NU(Q).EQ.NUP)) L=Q
+      ENDDO
+      IF (L.EQ.0) RETURN
+      IF ((TEMP.LE.0.).OR.(XXNE.LE.0.)) RETURN
+      LOGT = DLOG10(DBLE(TEMP))
+      LOGNE = DLOG10(DBLE(XXNE))
+      IF ((LOGT.LT.LT0(L)).OR.
+     *    (LOGT.GT.LT0(L)+DT(L)*DBLE(MT(L)-1))) RETURN
+      IF ((LOGNE.LT.LNE0(L)).OR.
+     *    (LOGNE.GT.LNE0(L)+DNE(L)*DBLE(MNE(L)-1))) RETURN
+
+      I = INT((LOGT-LT0(L))/DT(L))+1
+      J = INT((LOGNE-LNE0(L))/DNE(L))+1
+      I = MAX(1,MIN(I,MT(L)-1))
+      J = MAX(1,MIN(J,MNE(L)-1))
+      WT = (LOGT-(LT0(L)+DT(L)*DBLE(I-1)))/DT(L)
+      WN = (LOGNE-(LNE0(L)+DNE(L)*DBLE(J-1)))/DNE(L)
+
+C  Cache exact area of the interpolated reduced profile per layer and line.
+      IC = 0
+      DO Q=1,NCACHE(L)
+        IF ((CTEMP(Q,L).EQ.DBLE(TEMP)).AND.
+     *      (CNE(Q,L).EQ.DBLE(XXNE))) IC=Q
+      ENDDO
+      IF (IC.GT.0) THEN
+        NORM = CNORM(IC,L)
+      ELSE
+        Y1 = (1.D0-WN)*((1.D0-WT)*LOGS(1,J,I,L)+
+     *       WT*LOGS(1,J,I+1,L))+WN*((1.D0-WT)*LOGS(1,J+1,I,L)+
+     *       WT*LOGS(1,J+1,I+1,L))
+        A1 = 10.D0**LA0(L)
+        S1 = 10.D0**Y1
+        SUM = S1*A1
+        RATIO = 10.D0**DLA(L)
+        DO K=1,MP(L)-1
+          Y1 = (1.D0-WN)*((1.D0-WT)*LOGS(K,J,I,L)+
+     *         WT*LOGS(K,J,I+1,L))+WN*
+     *         ((1.D0-WT)*LOGS(K,J+1,I,L)+
+     *         WT*LOGS(K,J+1,I+1,L))
+          Y2 = (1.D0-WN)*((1.D0-WT)*LOGS(K+1,J,I,L)+
+     *         WT*LOGS(K+1,J,I+1,L))+WN*
+     *         ((1.D0-WT)*LOGS(K+1,J+1,I,L)+
+     *         WT*LOGS(K+1,J+1,I+1,L))
+          A1 = 10.D0**(LA0(L)+DLA(L)*DBLE(K-1))
+          S1 = 10.D0**Y1
+          SLOPE = (Y2-Y1)/DLA(L)
+          IF (DABS(SLOPE+1.D0).LT.1.D-12) THEN
+            TERM = S1*A1*DLOG(RATIO)
+          ELSE
+            TERM = S1*A1*(RATIO**(SLOPE+1.D0)-1.D0)/
+     *             (SLOPE+1.D0)
+          ENDIF
+          SUM = SUM+TERM
+        ENDDO
+        Y2 = (1.D0-WN)*((1.D0-WT)*LOGS(MP(L),J,I,L)+
+     *       WT*LOGS(MP(L),J,I+1,L))+WN*
+     *       ((1.D0-WT)*LOGS(MP(L),J+1,I,L)+
+     *       WT*LOGS(MP(L),J+1,I+1,L))
+        A1 = 10.D0**(LA0(L)+DLA(L)*DBLE(MP(L)-1))
+        SUM = SUM+(10.D0**Y2)*A1/1.5D0
+        NORM = 2.D0*SUM
+        IF ((NORM.LE.0.D0).OR.(NORM.NE.NORM)) RETURN
+        IF (NCACHE(L).LT.MAXC) THEN
+          NCACHE(L)=NCACHE(L)+1
+          CTEMP(NCACHE(L),L)=DBLE(TEMP)
+          CNE(NCACHE(L),L)=DBLE(XXNE)
+          CNORM(NCACHE(L),L)=NORM
+        ENDIF
+      ENDIF
+
+      F0 = 1.25D-9*DBLE(XXNE)**(2.D0/3.D0)
+      ALPHA = DABS(WAVE-WAVE0)/F0
+      IF (ALPHA.LE.0.D0) THEN
+        X = LA0(L)
+      ELSE
+        X = DLOG10(ALPHA)
+      ENDIF
+      XLAST = LA0(L)+DLA(L)*DBLE(MP(L)-1)
+      IF (X.LE.LA0(L)) THEN
+        K=1
+        WA=0.D0
+      ELSE IF (X.GE.XLAST) THEN
+        K=MP(L)
+        WA=0.D0
+      ELSE
+        K=INT((X-LA0(L))/DLA(L))+1
+        K=MAX(1,MIN(K,MP(L)-1))
+        WA=(X-(LA0(L)+DLA(L)*DBLE(K-1)))/DLA(L)
+      ENDIF
+      Y1 = (1.D0-WN)*((1.D0-WT)*LOGS(K,J,I,L)+
+     *     WT*LOGS(K,J,I+1,L))+WN*((1.D0-WT)*LOGS(K,J+1,I,L)+
+     *     WT*LOGS(K,J+1,I+1,L))
+      IF ((K.LT.MP(L)).AND.(X.GT.LA0(L)).AND.(X.LT.XLAST)) THEN
+        Y2 = (1.D0-WN)*((1.D0-WT)*LOGS(K+1,J,I,L)+
+     *       WT*LOGS(K+1,J,I+1,L))+WN*
+     *       ((1.D0-WT)*LOGS(K+1,J+1,I,L)+
+     *       WT*LOGS(K+1,J+1,I+1,L))
+        Y = (1.D0-WA)*Y1+WA*Y2
+      ELSE IF (X.GE.XLAST) THEN
+        Y = Y1-2.5D0*(X-XLAST)
+      ELSE
+        Y = Y1
+      ENDIF
+      PROF = REAL(10.D0**Y/F0/NORM)
+      VALID = 1
+      RETURN
+   90 CLOSE(96)
+      WRITE(*,*) 'ERROR: HLINOP_SET_TB09: cannot read the TB09 table ',
+     *  '(SYNSPEC tremblay.dat format): ',
+     *  LFILE(1:MAX(1,LEN_TRIM(LFILE)))
       STOP
       END
 
@@ -1834,5 +2158,3 @@ C     NOW ALPHA INTERPOLATION
    50 CONTINUE
       RETURN                       
       END  
-
-
