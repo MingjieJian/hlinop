@@ -35,6 +35,7 @@ PROGRAMS = {
     "drv_files": ["hlinprof.f", "hlinop.f"],
     "drv_hbopbf": ["hbop.f", "hlinprof.f", "hlinop.f"],
     "drv_medium": ["hbop.f", "hlinprof.f", "hlinop.f"],
+    "drv_tb09": ["hlinprof.f", "hlinop.f"],
 }
 DATA = {"HFILE": "stehle_long.dat", "HSELFFILE": "bpo_self.grid.DEC", "HVCSFILE": "vcsbalmer.dat"}
 
@@ -249,3 +250,22 @@ def vacair(w):
     s = 1e8 / w
     return w / (1.0000834213 + 2406030.0 / (1.30e10 - s ** 2) + 15997.0 / (3.89e9 - s ** 2))
 
+
+def tb09(commands, raw=False):
+    """Run drivers/drv_tb09.f.  commands: ("set", mode, dlo, dhi, path) -> HLINOP_SET_TB09;
+    ("stehl2", nup, wave0, T, ne, dlam, iboth) -> STEHL2 and STEHLS (columns HLIN HLINM, HLIN HLINM,
+    ANESL); ("hlinprof", nup, wave0, T, ne, dop, dlam) -> HLINPROF (n_H = n_He = 0).  The Stehle table
+    is the repository's stehle_long.dat."""
+    txt = str(build_dir() / DATA["HFILE"]) + "\n"
+    for c in commands:
+        if c[0] == "set":
+            txt += "1\n%d %.6f %.6f\n%s\n" % (c[1], c[2], c[3], c[4])
+        elif c[0] == "stehl2":
+            txt += "2 %d %.10f %.6e %.6e %.10f %d\n" % tuple(c[1:])
+        elif c[0] == "hlinprof":
+            txt += "3 %d %.10f %.6e %.6e %.6e %.10f\n" % tuple(c[1:])
+        else:
+            raise ValueError(c[0])
+    if raw:
+        return subprocess.run([str(build_dir() / "drv_tb09")], input=txt, capture_output=True, text=True)
+    return run("drv_tb09", txt)
